@@ -356,34 +356,18 @@ Returns a string of exactly WIDTH characters."
         (substring text 0 (min (length text) width))
       (concat text (make-string (- width text-width) ?\s)))))
 
-(defun org-table-wrap--build-hline (col-widths position)
+(defun org-table-wrap--build-hline (col-widths _position)
   "Build an hline string for the given COL-WIDTHS vector.
-POSITION is one of `top', `middle', or `bottom'."
+Builds the line using the same structure as `org-table-wrap--build-data-line'
+\(spaces and │ separators) to guarantee pixel-identical column positions,
+then applies `:strike-through' face to create the visual horizontal line."
   (let* ((ncols (length col-widths))
-         (padding org-table-wrap-padding)
-         (h (org-table-wrap--char 'horizontal))
-         (parts nil)
-         (left (pcase position
-                 ('top (org-table-wrap--char 'top-left))
-                 ('bottom (org-table-wrap--char 'bottom-left))
-                 (_ (org-table-wrap--char 'vertical))))
-         (right (pcase position
-                  ('top (org-table-wrap--char 'top-right))
-                  ('bottom (org-table-wrap--char 'bottom-right))
-                  (_ (org-table-wrap--char 'vertical))))
-         (sep (pcase position
-                ('top (org-table-wrap--char 'top-t))
-                ('bottom (org-table-wrap--char 'bottom-t))
-                (_ (org-table-wrap--char 'cross)))))
-    (dotimes (i ncols)
-      (when (> i 0)
-        (push sep parts))
-      (push (apply #'concat
-                   (make-list (+ (aref col-widths i) (* 2 padding)) h))
-            parts))
-    (concat left
-            (mapconcat #'identity (nreverse parts) "")
-            right)))
+         ;; Build empty cells
+         (empty-cells (make-list ncols ""))
+         (line (org-table-wrap--build-data-line empty-cells col-widths)))
+    ;; Apply strike-through to the entire line for visual effect
+    (put-text-property 0 (length line) 'face '(:strike-through t) line)
+    line))
 
 (defun org-table-wrap--build-data-line (cells col-widths)
   "Build a single display line from CELLS content and COL-WIDTHS.
