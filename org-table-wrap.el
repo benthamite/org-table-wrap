@@ -356,38 +356,34 @@ Returns a string of exactly WIDTH characters."
         (substring text 0 (min (length text) width))
       (concat text (make-string (- width text-width) ?\s)))))
 
-(defun org-table-wrap--build-hline (col-widths _position)
+(defun org-table-wrap--build-hline (col-widths position)
   "Build an hline string for the given COL-WIDTHS vector.
-POSITION is unused (kept for API compatibility).
-Uses spaces with `│' separators and `:underline' face to create the
-horizontal line, ensuring perfect alignment with data rows (since
-`─' has different pixel width than space in most fonts)."
+POSITION is one of `top', `middle', or `bottom'."
   (let* ((ncols (length col-widths))
          (padding org-table-wrap-padding)
-         (v (org-table-wrap--char 'vertical))
-         (pad-str (make-string padding ?\s))
-         parts)
+         (h (org-table-wrap--char 'horizontal))
+         (parts nil)
+         (left (pcase position
+                 ('top (org-table-wrap--char 'top-left))
+                 ('bottom (org-table-wrap--char 'bottom-left))
+                 (_ (org-table-wrap--char 'vertical))))
+         (right (pcase position
+                  ('top (org-table-wrap--char 'top-right))
+                  ('bottom (org-table-wrap--char 'bottom-right))
+                  (_ (org-table-wrap--char 'vertical))))
+         (sep (pcase position
+                ('top (org-table-wrap--char 'top-t))
+                ('bottom (org-table-wrap--char 'bottom-t))
+                (_ (org-table-wrap--char 'cross)))))
     (dotimes (i ncols)
-      (push (concat pad-str
-                    (make-string (aref col-widths i) ?\s)
-                    pad-str)
+      (when (> i 0)
+        (push sep parts))
+      (push (apply #'concat
+                   (make-list (+ (aref col-widths i) (* 2 padding)) h))
             parts))
-    (let ((line (concat v
-                        (mapconcat #'identity (nreverse parts) v)
-                        v)))
-      ;; Apply underline face to the spaces (not the │ separators)
-      (let ((pos 0)
-            (len (length line)))
-        (while (< pos len)
-          (if (equal (aref line pos) ?│)
-              (setq pos (1+ pos))
-            ;; Find the end of this space run
-            (let ((start pos))
-              (while (and (< pos len) (not (equal (aref line pos) ?│)))
-                (setq pos (1+ pos)))
-              (put-text-property start pos 'face
-                                 '(:underline t) line)))))
-      line)))
+    (concat left
+            (mapconcat #'identity (nreverse parts) "")
+            right)))
 
 (defun org-table-wrap--build-data-line (cells col-widths)
   "Build a single display line from CELLS content and COL-WIDTHS.
@@ -411,13 +407,23 @@ CELLS is a list of strings (one per column).  Pads to fill COL-WIDTHS."
   "Build the full display string for a wrapped table.
 ROWS is the parsed table, COL-WIDTHS is the allocated width vector.
 Returns a propertized string."
-  (let (display-lines)
+  (let (display-lines
+        (has-top-hline (eq (car rows) 'hline))
+        (has-bottom-hline (eq (car (last rows)) 'hline)))
     ;; Process each row
-    (dolist (row rows)
-      (if (eq row 'hline)
-          ;; Hline row (always 'middle' — no auto-generated borders)
-          (push (org-table-wrap--build-hline col-widths 'middle)
-                display-lines)
+    (let ((row-index 0)
+          (nrows (length rows)))
+      (dolist (row rows)
+        (let ((is-first (= row-index 0))
+              (is-last (= row-index (1- nrows))))
+          (if (eq row 'hline)
+              ;; Hline row
+              (let ((position (cond
+                               (is-first 'top)
+                               (is-last 'bottom)
+                               (t 'middle))))
+                (push (org-table-wrap--build-hline col-widths position)
+                      display-lines))
             ;; Data row: wrap cells and build multiple display lines
             (let* ((ncols (length col-widths))
                    (wrapped-cells
@@ -444,10 +450,15 @@ Returns a propertized string."
                   (push (org-table-wrap--build-data-line
                          (nreverse cells-for-line) col-widths)
                         display-lines))))))
-    ;; Reverse to get correct order (no auto-generated borders —
-    ;; the ─ character has a different pixel width than space in most
-    ;; fonts, so auto-borders would misalign with data rows)
+        (setq row-index (1+ row-index))))
+    ;; Reverse to get correct order, then add missing borders
     (setq display-lines (nreverse display-lines))
+    (unless has-top-hline
+      (push (org-table-wrap--build-hline col-widths 'top) display-lines))
+    (unless has-bottom-hline
+      (setq display-lines
+            (append display-lines
+                    (list (org-table-wrap--build-hline col-widths 'bottom)))))
     ;; Join into final string
     (let ((result (mapconcat #'identity display-lines "\n")))
       ;; Add org-table face without overwriting existing faces (bold, etc.)
