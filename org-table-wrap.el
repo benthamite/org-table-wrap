@@ -511,16 +511,28 @@ Uses `string-pixel-width' which respects text properties (face, etc.)."
           (setq max-px px))))
     max-px))
 
+(defun org-table-wrap--line-prefix-pixel-width (pos)
+  "Return the pixel width of the `line-prefix' at buffer position POS.
+Returns 0 if there is no prefix."
+  (let ((prefix (get-text-property pos 'line-prefix)))
+    (if (stringp prefix)
+        (string-pixel-width prefix)
+      0)))
+
 (defun org-table-wrap--fit-display (rows col-widths target-char-width)
   "Build a display string from ROWS and COL-WIDTHS that fits the window.
 TARGET-CHAR-WIDTH is the window width in characters.  If the built
 string exceeds the window's pixel width (due to Unicode characters
-being wider than ASCII), iteratively shrink the widest column and
-rebuild until it fits.  Returns the display string."
+being wider than ASCII, or `line-prefix' from `org-indent-mode'),
+iteratively shrink the widest column and rebuild until it fits.
+Returns the display string."
   (let* ((display-str (org-table-wrap--build-display-string rows col-widths))
          (win (or (get-buffer-window (current-buffer)) (selected-window)))
          (win-px (if (and (not noninteractive) win (window-live-p win))
-                     (window-body-width win t)
+                     ;; Subtract line-prefix pixel width since it gets
+                     ;; applied to every visual line in the display
+                     (- (window-body-width win t)
+                        (org-table-wrap--line-prefix-pixel-width (point)))
                    ;; Batch mode: approximate
                    (* target-char-width (frame-char-width))))
          (max-iterations 20)
@@ -557,6 +569,8 @@ Apply a wrapping overlay if the table overflows the window."
         ;; Table fits; remove any existing overlay
         (org-table-wrap--remove-overlay-at beg end)
       ;; Table overflows; build wrapped display
+      (save-excursion
+        (goto-char beg)  ; ensure point is at the table for prefix measurement
       (let* ((rows (org-table-wrap--parse-table beg end))
              (ncols (org-table-wrap--num-columns rows))
              (border-overhead (+ (1+ ncols) ; ncols+1 vertical separators
@@ -567,7 +581,7 @@ Apply a wrapping overlay if the table overflows the window."
              (col-widths (org-table-wrap--allocate-widths natural avail))
              (display-str (org-table-wrap--fit-display
                            rows col-widths win-width)))
-        (org-table-wrap--apply-overlay beg end display-str)))))
+        (org-table-wrap--apply-overlay beg end display-str))))))
 
 (defun org-table-wrap--process-buffer ()
   "Process all tables in the current buffer.
