@@ -490,15 +490,17 @@ DISPLAY-STRING is the wrapped rendering."
 
 ;;;; Core logic
 
-(defun org-table-wrap--available-width (&optional _pos)
+(defun org-table-wrap--available-width (&optional pos)
   "Return the available width for table rendering in the current window.
-The overlay suppresses `line-prefix' and `wrap-prefix', so the full
-window body width is available."
+Subtracts `line-prefix' width (from `org-indent-mode' etc.) since it
+is applied to every visual line in the overlay display."
   (let ((win (and (not noninteractive)
                   (or (get-buffer-window (current-buffer))
                       (selected-window)))))
     (if (and win (window-live-p win))
-        (window-body-width win)
+        (let* ((prefix (get-text-property (or pos (point)) 'line-prefix))
+               (prefix-len (if (stringp prefix) (length prefix) 0)))
+          (- (window-body-width win) prefix-len))
       80)))
 
 (defun org-table-wrap--max-line-pixel-width (str)
