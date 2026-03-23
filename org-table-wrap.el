@@ -489,7 +489,7 @@ Merges FACE with any existing faces at each position."
 (defun org-table-wrap--remove-overlays ()
   "Remove all org-table-wrap overlays from the current buffer."
   (dolist (entry org-table-wrap--overlays)
-    (dolist (ov (nthcdr 2 entry))
+    (let ((ov (nth 2 entry)))
       (when (overlayp ov)
         (delete-overlay ov))))
   (setq org-table-wrap--overlays nil)
@@ -497,44 +497,37 @@ Merges FACE with any existing faces at each position."
   (remove-from-invisibility-spec '(org-table-wrap . t)))
 
 (defun org-table-wrap--remove-overlay-at (beg end)
-  "Remove the org-table-wrap overlays for the table at BEG..END."
+  "Remove the org-table-wrap overlay for the table at BEG..END."
   (setq org-table-wrap--overlays
         (cl-remove-if
          (lambda (entry)
            (when (and (= (nth 0 entry) beg)
                       (= (nth 1 entry) end))
-             (dolist (ov (nthcdr 2 entry))
+             (let ((ov (nth 2 entry)))
                (when (overlayp ov)
                  (delete-overlay ov)))
              t))
          org-table-wrap--overlays)))
 
 (defun org-table-wrap--apply-overlay (beg end display-string)
-  "Apply overlays to the table region BEG..END.
-Uses `invisible' to hide the original table text (keeping point
-traversal working) and `before-string' to show the wrapped rendering.
-DISPLAY-STRING is the wrapped rendering."
+  "Apply an overlay to the table region BEG..END.
+Uses a single overlay with `invisible' (to hide original text while
+keeping point traversal) and `before-string' (to show the wrapped
+rendering).  DISPLAY-STRING is the wrapped rendering."
   ;; Remove any existing overlay for this region
   (org-table-wrap--remove-overlay-at beg end)
   ;; Ensure our invisibility spec is registered
   (add-to-invisibility-spec '(org-table-wrap . t))
-  ;; Overlay 1: hide the original table text
   (let* ((ov-end (if (and (< end (point-max))
                           (= (char-before end) ?\n))
                      (1- end)
                    end))
-         (invis-ov (make-overlay beg ov-end nil nil nil)))
-    (overlay-put invis-ov 'invisible 'org-table-wrap)
-    (overlay-put invis-ov 'org-table-wrap t)
-    (overlay-put invis-ov 'evaporate t)
-    ;; Overlay 2: show the wrapped table as before-string
-    (let ((display-ov (make-overlay beg beg nil t nil)))
-      (overlay-put display-ov 'before-string
-                   (concat display-string "\n"))
-      (overlay-put display-ov 'org-table-wrap t)
-      (overlay-put display-ov 'evaporate t)
-      (push (list beg end invis-ov display-ov)
-            org-table-wrap--overlays))))
+         (ov (make-overlay beg ov-end nil nil nil)))
+    (overlay-put ov 'invisible 'org-table-wrap)
+    (overlay-put ov 'before-string (concat display-string "\n"))
+    (overlay-put ov 'org-table-wrap t)
+    (overlay-put ov 'evaporate t)
+    (push (list beg end ov) org-table-wrap--overlays)))
 
 (defun org-table-wrap--find-overlay-at (pos)
   "Find the org-table-wrap overlay entry covering POS."
