@@ -148,28 +148,29 @@ Override the available width to WIDTH."
 ;;;; Hline construction tests
 
 (ert-deftest org-table-wrap-test-hline-top ()
-  "Hline uses │ separators and strike-through face."
+  "Top hline uses correct corner characters."
   (let ((org-table-wrap-use-unicode t)
         (org-table-wrap-padding 1))
     (let ((hline (org-table-wrap--build-hline (vector 3 4) 'top)))
-      (should (string-prefix-p "│" hline))
-      (should (string-suffix-p "│" hline))
-      (should (eq (plist-get (get-text-property 1 'face hline) :strike-through) t)))))
+      (should (string-prefix-p "┌" hline))
+      (should (string-suffix-p "┐" hline))
+      (should (string-match-p "┬" hline)))))
 
 (ert-deftest org-table-wrap-test-hline-middle ()
-  "Middle hline uses │ separators."
+  "Middle hline uses cross characters."
   (let ((org-table-wrap-use-unicode t)
         (org-table-wrap-padding 1))
     (let ((hline (org-table-wrap--build-hline (vector 3 4) 'middle)))
-      (should (string-match-p "│" hline)))))
+      (should (string-match-p "┼" hline)))))
 
 (ert-deftest org-table-wrap-test-hline-bottom ()
-  "Bottom hline uses │ separators."
+  "Bottom hline uses correct corner characters."
   (let ((org-table-wrap-use-unicode t)
         (org-table-wrap-padding 1))
     (let ((hline (org-table-wrap--build-hline (vector 3 4) 'bottom)))
-      (should (string-prefix-p "│" hline))
-      (should (string-suffix-p "│" hline)))))
+      (should (string-prefix-p "└" hline))
+      (should (string-suffix-p "┘" hline))
+      (should (string-match-p "┴" hline)))))
 
 ;;;; Display string tests
 
@@ -179,11 +180,8 @@ Override the available width to WIDTH."
          (org-table-wrap-padding 1)
          (rows '(hline ("hello" "world") hline))
          (widths (vector 10 10))
-         (display (org-table-wrap--build-display-string rows widths))
-         (face0 (get-text-property 0 'face display)))
-    ;; Face might be org-table, or a list containing org-table
-    (should (or (eq face0 'org-table)
-                (and (listp face0) (memq 'org-table face0))))))
+         (display (org-table-wrap--build-display-string rows widths)))
+    (should (eq (get-text-property 0 'face display) 'org-table))))
 
 (ert-deftest org-table-wrap-test-display-string-structure ()
   "The display string has the expected number of lines."
@@ -287,12 +285,13 @@ Override the available width to WIDTH."
          (widths (vector 8 8))
          (display (org-table-wrap--build-display-string rows widths))
          (lines (split-string display "\n")))
-    ;; First line should be a hline with │
-    (should (string-prefix-p "│" (nth 0 lines)))
-    ;; Last line should be a hline with │
-    (should (string-prefix-p "│" (nth 2 lines)))
-    ;; Hlines should have strike-through face
-    (should (get-text-property 1 'face (nth 0 lines)))))
+    ;; First line should be a top hline
+    (should (string-prefix-p "┌" (nth 0 lines)))
+    ;; Last line should be a bottom hline
+    (should (string-prefix-p "└" (nth 2 lines)))
+    ;; All hlines should use ─
+    (should (string-match-p "─" (nth 0 lines)))
+    (should (string-match-p "─" (nth 2 lines)))))
 
 ;;;; Empty cells handled
 
@@ -365,13 +364,10 @@ Override the available width to WIDTH."
          (rows '(("bold text" "normal")))
          (widths (vector 10 7))
          (display (org-table-wrap--build-display-string rows widths)))
-    ;; The string should have org-table face (possibly merged with others)
-    (let ((face0 (get-text-property 0 'face display))
-          (face-end (get-text-property (1- (length display)) 'face display)))
-      (should (or (eq face0 'org-table)
-                  (and (listp face0) (memq 'org-table face0))))
-      (should (or (eq face-end 'org-table)
-                  (and (listp face-end) (memq 'org-table face-end)))))))
+    ;; The entire string should have org-table face
+    (should (eq (get-text-property 0 'face display) 'org-table))
+    (should (eq (get-text-property (1- (length display)) 'face display)
+                'org-table))))
 
 ;;;; Single data line building
 
