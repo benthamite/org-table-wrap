@@ -210,7 +210,7 @@ or a list of cell content strings."
     (save-excursion
       (goto-char beg)
       (while (< (point) end)
-        (let* ((line (buffer-substring-no-properties
+        (let* ((line (buffer-substring
                       (line-beginning-position)
                       (line-end-position)))
                (parsed (org-table-wrap--parse-row line)))
@@ -440,9 +440,28 @@ Returns a propertized string."
                     (list (org-table-wrap--build-hline col-widths 'bottom)))))
     ;; Join into final string
     (let ((result (mapconcat #'identity display-lines "\n")))
-      ;; Apply org-table face to the entire string
-      (put-text-property 0 (length result) 'face 'org-table result)
+      ;; Add org-table face without overwriting existing faces (bold, etc.)
+      (org-table-wrap--add-face result 'org-table)
       result)))
+
+(defun org-table-wrap--add-face (str face)
+  "Add FACE to STR without overwriting existing face properties.
+Merges FACE with any existing faces at each position."
+  (let ((pos 0)
+        (len (length str)))
+    (while (< pos len)
+      (let* ((existing (get-text-property pos 'face str))
+             (merged (cond
+                      ((null existing) face)
+                      ((listp existing)
+                       (if (memq face existing) existing
+                         (append existing (list face))))
+                      ((eq existing face) face)
+                      (t (list existing face))))
+             (next-change (or (next-single-property-change pos 'face str)
+                              len)))
+        (put-text-property pos next-change 'face merged str)
+        (setq pos next-change)))))
 
 ;;;; Overlay management
 
@@ -482,11 +501,6 @@ DISPLAY-STRING is the wrapped rendering."
     (overlay-put ov 'display display-string)
     (overlay-put ov 'org-table-wrap t)
     (overlay-put ov 'evaporate t)
-    ;; Override org-indent's line-prefix and wrap-prefix so they don't
-    ;; add indentation to every visual line within the display string.
-    ;; The display string is already sized to fit the full window width.
-    (overlay-put ov 'line-prefix "")
-    (overlay-put ov 'wrap-prefix "")
     (push (list beg end ov) org-table-wrap--overlays)))
 
 (defun org-table-wrap--find-overlay-at (pos)
@@ -576,6 +590,7 @@ Apply a wrapping overlay if the table overflows the window."
         ;; Table fits; remove any existing overlay
         (org-table-wrap--remove-overlay-at beg end)
       ;; Table overflows; build wrapped display
+      (font-lock-ensure beg end)  ; ensure text properties are up to date
       (save-excursion
         (goto-char beg)  ; ensure point is at the table for prefix measurement
       (let* ((rows (org-table-wrap--parse-table beg end))
@@ -647,17 +662,37 @@ interactive session, defers processing until the buffer is displayed."
 
 ;;;; Post-command hook (org-appear pattern)
 
+(defun org-table-wrap--overlay-at-point ()
+  "Return the (BEG . END) of an org-table-wrap overlay near point.
+Checks at point, point-1, and point+1 since display overlays make
+their region intangible and point jumps to the boundary."
+  (cl-loop for pos in (list (point)
+                            (max (point-min) (1- (point)))
+                            (min (point-max) (1+ (point))))
+           for entry = (org-table-wrap--find-overlay-at pos)
+           when entry
+           return (cons (nth 0 entry) (nth 1 entry))))
+
 (defun org-table-wrap--post-command ()
-  "Track point movement relative to tables, toggling overlays."
+  "Track point movement relative to tables, toggling overlays.
+Since display overlays are intangible, detect entry by checking if
+point is at an overlay boundary rather than inside the table."
   (when (and org-table-wrap-mode (derived-mode-p 'org-mode))
-    (let ((in-table (org-table-wrap--point-in-table-p)))
+    (let ((in-table (or (org-table-wrap--point-in-table-p)
+                        ;; Also check overlay boundaries for intangible overlays
+                        (org-table-wrap--overlay-at-point))))
       (cond
-       ;; Point entered a table
+       ;; Point entered a table (or hit its overlay boundary)
        ((and in-table (not org-table-wrap--current-table))
         (setq org-table-wrap--current-table in-table)
         ;; Remove the overlay so user can edit
         (org-table-wrap--remove-overlay-at
-         (car in-table) (cdr in-table)))
+         (car in-table) (cdr in-table))
+        ;; Move point into the table
+        (when (< (point) (car in-table))
+          (goto-char (car in-table)))
+        (when (>= (point) (cdr in-table))
+          (goto-char (1- (cdr in-table)))))
        ;; Point moved to a different table
        ((and in-table org-table-wrap--current-table
              (not (and (= (car in-table)
