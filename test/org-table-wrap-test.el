@@ -148,29 +148,29 @@ Override the available width to WIDTH."
 ;;;; Hline construction tests
 
 (ert-deftest org-table-wrap-test-hline-top ()
-  "Top hline uses correct corner characters."
+  "Hline uses │ separators and spaces (not ─) for alignment."
   (let ((org-table-wrap-use-unicode t)
         (org-table-wrap-padding 1))
     (let ((hline (org-table-wrap--build-hline (vector 3 4) 'top)))
-      (should (string-prefix-p "┌" hline))
-      (should (string-suffix-p "┐" hline))
-      (should (string-match-p "┬" hline)))))
+      (should (string-prefix-p "│" hline))
+      (should (string-suffix-p "│" hline))
+      ;; Uses spaces, not ─
+      (should-not (string-match-p "─" hline)))))
 
 (ert-deftest org-table-wrap-test-hline-middle ()
-  "Middle hline uses cross characters."
+  "Middle hline uses │ separators."
   (let ((org-table-wrap-use-unicode t)
         (org-table-wrap-padding 1))
     (let ((hline (org-table-wrap--build-hline (vector 3 4) 'middle)))
-      (should (string-match-p "┼" hline)))))
+      (should (string-match-p "│" hline)))))
 
 (ert-deftest org-table-wrap-test-hline-bottom ()
-  "Bottom hline uses correct corner characters."
+  "Bottom hline uses │ separators."
   (let ((org-table-wrap-use-unicode t)
         (org-table-wrap-padding 1))
     (let ((hline (org-table-wrap--build-hline (vector 3 4) 'bottom)))
-      (should (string-prefix-p "└" hline))
-      (should (string-suffix-p "┘" hline))
-      (should (string-match-p "┴" hline)))))
+      (should (string-prefix-p "│" hline))
+      (should (string-suffix-p "│" hline)))))
 
 ;;;; Display string tests
 
@@ -285,14 +285,12 @@ Override the available width to WIDTH."
          (widths (vector 8 8))
          (display (org-table-wrap--build-display-string rows widths))
          (lines (split-string display "\n")))
-    ;; First line should be a top hline (from the table's own hline)
+    ;; First line should be a hline
     (should (string-prefix-p "│" (nth 0 lines)))
-    ;; Last line should be a bottom hline (from the table's own hline)
+    ;; Last line should be a hline
     (should (string-prefix-p "│" (nth 2 lines)))
-    ;; Note: these are 'middle' position hlines since no auto-borders
-    ;; All hlines should use ─
-    (should (string-match-p "─" (nth 0 lines)))
-    (should (string-match-p "─" (nth 2 lines)))))
+    ;; Hlines use underlined spaces, not ─
+    (should (get-text-property 1 'face (nth 0 lines)))))
 
 ;;;; Empty cells handled
 

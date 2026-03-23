@@ -356,34 +356,38 @@ Returns a string of exactly WIDTH characters."
         (substring text 0 (min (length text) width))
       (concat text (make-string (- width text-width) ?\s)))))
 
-(defun org-table-wrap--build-hline (col-widths position)
+(defun org-table-wrap--build-hline (col-widths _position)
   "Build an hline string for the given COL-WIDTHS vector.
-POSITION is one of `top', `middle', or `bottom'."
+POSITION is unused (kept for API compatibility).
+Uses spaces with `│' separators and `:underline' face to create the
+horizontal line, ensuring perfect alignment with data rows (since
+`─' has different pixel width than space in most fonts)."
   (let* ((ncols (length col-widths))
          (padding org-table-wrap-padding)
-         (h (org-table-wrap--char 'horizontal))
-         (parts nil)
-         (left (pcase position
-                 ('top (org-table-wrap--char 'top-left))
-                 ('bottom (org-table-wrap--char 'bottom-left))
-                 (_ (org-table-wrap--char 'vertical))))
-         (right (pcase position
-                  ('top (org-table-wrap--char 'top-right))
-                  ('bottom (org-table-wrap--char 'bottom-right))
-                  (_ (org-table-wrap--char 'vertical))))
-         (sep (pcase position
-                ('top (org-table-wrap--char 'top-t))
-                ('bottom (org-table-wrap--char 'bottom-t))
-                (_ (org-table-wrap--char 'cross)))))
+         (v (org-table-wrap--char 'vertical))
+         (pad-str (make-string padding ?\s))
+         parts)
     (dotimes (i ncols)
-      (when (> i 0)
-        (push sep parts))
-      (push (apply #'concat
-                   (make-list (+ (aref col-widths i) (* 2 padding)) h))
+      (push (concat pad-str
+                    (make-string (aref col-widths i) ?\s)
+                    pad-str)
             parts))
-    (concat left
-            (mapconcat #'identity (nreverse parts) "")
-            right)))
+    (let ((line (concat v
+                        (mapconcat #'identity (nreverse parts) v)
+                        v)))
+      ;; Apply underline face to the spaces (not the │ separators)
+      (let ((pos 0)
+            (len (length line)))
+        (while (< pos len)
+          (if (equal (aref line pos) ?│)
+              (setq pos (1+ pos))
+            ;; Find the end of this space run
+            (let ((start pos))
+              (while (and (< pos len) (not (equal (aref line pos) ?│)))
+                (setq pos (1+ pos)))
+              (put-text-property start pos 'face
+                                 '(:underline t) line)))))
+      line)))
 
 (defun org-table-wrap--build-data-line (cells col-widths)
   "Build a single display line from CELLS content and COL-WIDTHS.
