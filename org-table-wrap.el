@@ -525,7 +525,13 @@ Apply a wrapping overlay if the table overflows the window."
         (org-table-wrap--apply-overlay beg end display-str)))))
 
 (defun org-table-wrap--process-buffer ()
-  "Process all tables in the current buffer."
+  "Process all tables in the current buffer.
+Ensures processing runs with the buffer's window selected for
+accurate pixel measurements."
+  (when (derived-mode-p 'org-mode)
+    (let ((win (get-buffer-window (current-buffer))))
+      (when (and win (not (eq win (selected-window))))
+        (select-window win 'norecord))))
   (when (derived-mode-p 'org-mode)
     (let ((tables (org-table-wrap--find-tables)))
       ;; Remove overlays for tables that no longer exist
