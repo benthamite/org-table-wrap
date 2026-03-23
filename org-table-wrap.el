@@ -527,13 +527,36 @@ Apply a wrapping overlay if the table overflows the window."
 (defun org-table-wrap--process-buffer ()
   "Process all tables in the current buffer.
 Ensures processing runs with the buffer's window selected for
-accurate pixel measurements."
+accurate pixel measurements.  If the buffer has no window in an
+interactive session, defers processing until the buffer is displayed."
   (when (derived-mode-p 'org-mode)
     (let ((win (get-buffer-window (current-buffer))))
-      (when (and win (not (eq win (selected-window))))
-        (select-window win 'norecord))))
+      (cond
+       ;; Buffer has a visible window: use it for pixel-accurate measurement
+       ((and win (window-live-p win))
+        (with-selected-window win
+          (org-table-wrap--process-buffer-1
+           (org-table-wrap--find-tables))))
+       ;; Interactive but no window: defer until buffer is displayed
+       ((not noninteractive)
+        (add-hook 'window-configuration-change-hook
+                  #'org-table-wrap--deferred-process nil t))
+       ;; Batch mode: use character-count fallback directly
+       (t
+        (org-table-wrap--process-buffer-1
+         (org-table-wrap--find-tables)))))))
+
+(defun org-table-wrap--deferred-process ()
+  "Process tables when the buffer first becomes visible."
+  (when (and org-table-wrap-mode (get-buffer-window (current-buffer)))
+    (remove-hook 'window-configuration-change-hook
+                 #'org-table-wrap--deferred-process t)
+    (org-table-wrap--process-buffer)))
+
+(defun org-table-wrap--process-buffer-1 (tables)
+  "Internal: process TABLES in the current buffer."
   (when (derived-mode-p 'org-mode)
-    (let ((tables (org-table-wrap--find-tables)))
+    (let ((tables (or tables (org-table-wrap--find-tables))))
       ;; Remove overlays for tables that no longer exist
       (let ((valid-overlays nil))
         (dolist (entry org-table-wrap--overlays)
@@ -626,6 +649,8 @@ modified."
     (remove-hook 'post-command-hook #'org-table-wrap--post-command t)
     (remove-hook 'window-size-change-functions
                  #'org-table-wrap--window-size-changed)
+    (remove-hook 'window-configuration-change-hook
+                 #'org-table-wrap--deferred-process t)
     (org-table-wrap--remove-overlays)
     (setq org-table-wrap--current-table nil)))
 
