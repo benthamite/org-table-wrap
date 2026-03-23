@@ -139,8 +139,8 @@ Only includes tables that are visible (not inside folded headings/drawers)."
             (let ((end (org-table-end)))
               ;; Skip if we already captured this table
               (unless (and tables
-                          (>= start (caar (last tables)))
-                          (<= start (cadar (last tables))))
+                          (>= start (caar tables))
+                          (<= start (cadar tables)))
                 (push (list start end) tables))
               (goto-char end))))))
     (nreverse tables)))
@@ -406,6 +406,31 @@ CELLS is a list of strings (one per column).  Pads to fill COL-WIDTHS."
             (mapconcat #'identity (nreverse parts) v)
             v)))
 
+(defun org-table-wrap--render-data-row (row col-widths)
+  "Render data ROW into display lines using COL-WIDTHS.
+Wraps each cell to its allocated width, strips invisible characters,
+and builds one display line per sub-row.  Returns a list of strings."
+  (let* ((ncols (length col-widths))
+         (wrapped-cells
+          (let (result)
+            (dotimes (i ncols)
+              (let* ((cell-text (string-trim (or (nth i row) "")))
+                     (cell-text (org-table-wrap--visible-text cell-text)))
+                (push (org-table-wrap--wrap-text cell-text (aref col-widths i))
+                      result)))
+            (nreverse result)))
+         (max-lines (apply #'max 1 (mapcar #'length wrapped-cells)))
+         (lines nil))
+    (dotimes (line-idx max-lines)
+      (let (cells-for-line)
+        (dotimes (i ncols)
+          (push (or (nth line-idx (nth i wrapped-cells)) "")
+                cells-for-line))
+        (push (org-table-wrap--build-data-line
+               (nreverse cells-for-line) col-widths)
+              lines)))
+    (nreverse lines)))
+
 (defun org-table-wrap--build-display-string (rows col-widths)
   "Build the full display string for a wrapped table.
 ROWS is the parsed table, COL-WIDTHS is the allocated width vector.
@@ -427,32 +452,9 @@ Returns a propertized string."
                                (t 'middle))))
                 (push (org-table-wrap--build-hline col-widths position)
                       display-lines))
-            ;; Data row: wrap cells and build multiple display lines
-            (let* ((ncols (length col-widths))
-                   (wrapped-cells
-                    (let (result)
-                      (dotimes (i ncols)
-                        (let* ((cell-text (or (nth i row) ""))
-                               (cell-text (string-trim cell-text))
-                               ;; Strip invisible chars (e.g. emphasis markers)
-                               (cell-text (org-table-wrap--visible-text
-                                           cell-text)))
-                          (push (org-table-wrap--wrap-text
-                                 cell-text (aref col-widths i))
-                                result)))
-                      (nreverse result)))
-                   (max-lines (apply #'max 1
-                                     (mapcar #'length wrapped-cells))))
-              ;; Build each sub-line of this row
-              (dotimes (line-idx max-lines)
-                (let (cells-for-line)
-                  (dotimes (i ncols)
-                    (let* ((cell-lines (nth i wrapped-cells))
-                           (cell-text (or (nth line-idx cell-lines) "")))
-                      (push cell-text cells-for-line)))
-                  (push (org-table-wrap--build-data-line
-                         (nreverse cells-for-line) col-widths)
-                        display-lines))))))
+            ;; Data row: wrap cells and build display lines
+            (dolist (line (org-table-wrap--render-data-row row col-widths))
+              (push line display-lines))))
         (setq row-index (1+ row-index))))
     ;; Reverse to get correct order, then add missing borders
     (setq display-lines (nreverse display-lines))
@@ -569,24 +571,29 @@ face remapping, text-scale-mode, and any other display modifications."
             (line-beginning-position)
             (line-end-position))))))
 
+(defun org-table-wrap--apply-and-measure (win beg end display-str)
+  "Apply DISPLAY-STR as overlay at BEG..END in WIN and return pixel width.
+Calls `redisplay' to ensure accurate measurement."
+  (org-table-wrap--apply-overlay beg end display-str)
+  (redisplay t)
+  (org-table-wrap--rendered-line-pixel-width win beg))
+
 (defun org-table-wrap--fit-display (rows col-widths beg end target-char-width)
   "Build a display string from ROWS and COL-WIDTHS that fits the window.
 BEG and END are the table region bounds.  TARGET-CHAR-WIDTH is the
 window width in characters.  After applying the overlay, measures the
-actual rendered pixel width and computes a shrink ratio to resize all
-columns proportionally in one step.  Returns the display string."
+actual rendered pixel width and shrinks columns if needed.  Returns
+the display string."
   (let* ((display-str (org-table-wrap--build-display-string rows col-widths))
          (win (or (get-buffer-window (current-buffer)) (selected-window)))
          (win-px (if (and (not noninteractive) win (window-live-p win))
                      (window-body-width win t)
                    (* target-char-width (frame-char-width)))))
     (when (and (not noninteractive) win (window-live-p win))
-      ;; Apply overlay and measure actual rendered width
-      (org-table-wrap--apply-overlay beg end display-str)
-      (redisplay t)
-      (let ((rendered-px (org-table-wrap--rendered-line-pixel-width win beg)))
+      (let ((rendered-px (org-table-wrap--apply-and-measure
+                          win beg end display-str)))
         (when (> rendered-px win-px)
-          ;; Compute shrink ratio and apply proportionally to all columns
+          ;; Shrink all columns proportionally
           (let* ((ratio (/ (float win-px) (float rendered-px)))
                  (min-w org-table-wrap-min-column-width)
                  (ncols (length col-widths)))
@@ -595,34 +602,29 @@ columns proportionally in one step.  Returns the display string."
                     (max min-w (floor (* (aref col-widths i) ratio)))))
             (setq display-str
                   (org-table-wrap--build-display-string rows col-widths))
-            ;; One verification pass: measure again and fine-tune if needed
-            (org-table-wrap--apply-overlay beg end display-str)
-            (redisplay t)
             (setq rendered-px
-                  (org-table-wrap--rendered-line-pixel-width win beg))
-            (when (> rendered-px win-px)
-              ;; Shrink widest column by 1 until it fits (at most a few iterations)
-              (let ((max-fine-tune 5)
-                    (iter 0))
-                (while (and (< iter max-fine-tune)
-                            (> rendered-px win-px))
-                  (let ((widest-idx 0)
-                        (widest-val 0))
-                    (dotimes (i ncols)
-                      (when (> (aref col-widths i) widest-val)
-                        (setq widest-val (aref col-widths i))
-                        (setq widest-idx i)))
-                    (when (<= widest-val min-w)
-                      (setq iter max-fine-tune))
-                    (aset col-widths widest-idx
-                          (max min-w (1- (aref col-widths widest-idx)))))
-                  (setq display-str
-                        (org-table-wrap--build-display-string rows col-widths))
-                  (org-table-wrap--apply-overlay beg end display-str)
-                  (redisplay t)
-                  (setq rendered-px
-                        (org-table-wrap--rendered-line-pixel-width win beg))
-                  (setq iter (1+ iter)))))))))
+                  (org-table-wrap--apply-and-measure win beg end display-str))
+            ;; Fine-tune: shrink widest column by 1 until it fits
+            (let ((max-iter 5)
+                  (iter 0))
+              (while (and (< iter max-iter)
+                          (> rendered-px win-px))
+                (let ((widest-idx 0)
+                      (widest-val 0))
+                  (dotimes (i ncols)
+                    (when (> (aref col-widths i) widest-val)
+                      (setq widest-val (aref col-widths i))
+                      (setq widest-idx i)))
+                  (when (<= widest-val min-w)
+                    (setq iter max-iter))
+                  (aset col-widths widest-idx
+                        (max min-w (1- (aref col-widths widest-idx)))))
+                (setq display-str
+                      (org-table-wrap--build-display-string rows col-widths))
+                (setq rendered-px
+                      (org-table-wrap--apply-and-measure
+                       win beg end display-str))
+                (setq iter (1+ iter))))))))
     display-str))
 
 (defun org-table-wrap--process-table (beg end)
@@ -711,35 +713,23 @@ interactive session, defers processing until the buffer is displayed."
 With `invisible' overlays (not `display'), point can traverse the
 table region normally, so `org-at-table-p' works."
   (when (and org-table-wrap-mode (derived-mode-p 'org-mode))
-    (let ((in-table (org-table-wrap--point-in-table-p)))
-      (cond
-       ;; Point entered a table
-       ((and in-table (not org-table-wrap--current-table))
-        (setq org-table-wrap--current-table in-table)
-        ;; Remove the overlay so user can edit
-        (org-table-wrap--remove-overlay-at
-         (car in-table) (cdr in-table)))
-       ;; Point moved to a different table
-       ((and in-table org-table-wrap--current-table
-             (not (and (= (car in-table)
-                          (car org-table-wrap--current-table))
-                       (= (cdr in-table)
-                          (cdr org-table-wrap--current-table)))))
-        ;; Re-wrap the old table
-        (org-table-wrap--process-table
-         (car org-table-wrap--current-table)
-         (cdr org-table-wrap--current-table))
-        ;; Unwrap the new table
-        (setq org-table-wrap--current-table in-table)
-        (org-table-wrap--remove-overlay-at
-         (car in-table) (cdr in-table)))
-       ;; Point left a table
-       ((and (not in-table) org-table-wrap--current-table)
-        ;; Re-wrap the table we left
-        (org-table-wrap--process-table
-         (car org-table-wrap--current-table)
-         (cdr org-table-wrap--current-table))
-        (setq org-table-wrap--current-table nil))))))
+    (let* ((in-table (org-table-wrap--point-in-table-p))
+           (same-table (and in-table org-table-wrap--current-table
+                            (= (car in-table)
+                               (car org-table-wrap--current-table))
+                            (= (cdr in-table)
+                               (cdr org-table-wrap--current-table)))))
+      (unless same-table
+        ;; Re-wrap the table we left (if any)
+        (when org-table-wrap--current-table
+          (org-table-wrap--process-table
+           (car org-table-wrap--current-table)
+           (cdr org-table-wrap--current-table)))
+        ;; Remove overlay from the table we entered (if any)
+        (when in-table
+          (org-table-wrap--remove-overlay-at
+           (car in-table) (cdr in-table)))
+        (setq org-table-wrap--current-table in-table)))))
 
 ;;;; Window resize handling
 
