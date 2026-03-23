@@ -183,6 +183,24 @@ back to character columns."
           (end (org-table-end)))
       (cons beg end))))
 
+;;;; Text utilities
+
+(defun org-table-wrap--visible-text (str)
+  "Return only the visible characters from STR, preserving text properties.
+Strips characters that have the `invisible' property set, which
+handles Org emphasis markers hidden by `org-hide-emphasis-markers'."
+  (let ((parts nil)
+        (pos 0)
+        (len (length str)))
+    (while (< pos len)
+      (let* ((invis (get-text-property pos 'invisible str))
+             (next (or (next-single-property-change pos 'invisible str)
+                       len)))
+        (unless invis
+          (push (substring str pos next) parts))
+        (setq pos next)))
+    (apply #'concat (nreverse parts))))
+
 ;;;; Table parsing
 
 (defun org-table-wrap--parse-row (line)
@@ -412,7 +430,10 @@ Returns a propertized string."
                     (let (result)
                       (dotimes (i ncols)
                         (let* ((cell-text (or (nth i row) ""))
-                               (cell-text (string-trim cell-text)))
+                               (cell-text (string-trim cell-text))
+                               ;; Strip invisible chars (e.g. emphasis markers)
+                               (cell-text (org-table-wrap--visible-text
+                                           cell-text)))
                           (push (org-table-wrap--wrap-text
                                  cell-text (aref col-widths i))
                                 result)))
@@ -468,40 +489,52 @@ Merges FACE with any existing faces at each position."
 (defun org-table-wrap--remove-overlays ()
   "Remove all org-table-wrap overlays from the current buffer."
   (dolist (entry org-table-wrap--overlays)
-    (let ((ov (nth 2 entry)))
+    (dolist (ov (nthcdr 2 entry))
       (when (overlayp ov)
         (delete-overlay ov))))
-  (setq org-table-wrap--overlays nil))
+  (setq org-table-wrap--overlays nil)
+  ;; Remove our invisibility spec
+  (remove-from-invisibility-spec '(org-table-wrap . t)))
 
 (defun org-table-wrap--remove-overlay-at (beg end)
-  "Remove the org-table-wrap overlay for the table at BEG..END."
+  "Remove the org-table-wrap overlays for the table at BEG..END."
   (setq org-table-wrap--overlays
         (cl-remove-if
          (lambda (entry)
            (when (and (= (nth 0 entry) beg)
                       (= (nth 1 entry) end))
-             (let ((ov (nth 2 entry)))
+             (dolist (ov (nthcdr 2 entry))
                (when (overlayp ov)
                  (delete-overlay ov)))
              t))
          org-table-wrap--overlays)))
 
 (defun org-table-wrap--apply-overlay (beg end display-string)
-  "Apply a display overlay to the table region BEG..END.
+  "Apply overlays to the table region BEG..END.
+Uses `invisible' to hide the original table text (keeping point
+traversal working) and `before-string' to show the wrapped rendering.
 DISPLAY-STRING is the wrapped rendering."
   ;; Remove any existing overlay for this region
   (org-table-wrap--remove-overlay-at beg end)
-  ;; The overlay covers from BEG to END-1 (excluding the final newline)
-  ;; so point can still be placed at END.
+  ;; Ensure our invisibility spec is registered
+  (add-to-invisibility-spec '(org-table-wrap . t))
+  ;; Overlay 1: hide the original table text
   (let* ((ov-end (if (and (< end (point-max))
                           (= (char-before end) ?\n))
                      (1- end)
                    end))
-         (ov (make-overlay beg ov-end nil t nil)))
-    (overlay-put ov 'display display-string)
-    (overlay-put ov 'org-table-wrap t)
-    (overlay-put ov 'evaporate t)
-    (push (list beg end ov) org-table-wrap--overlays)))
+         (invis-ov (make-overlay beg ov-end nil nil nil)))
+    (overlay-put invis-ov 'invisible 'org-table-wrap)
+    (overlay-put invis-ov 'org-table-wrap t)
+    (overlay-put invis-ov 'evaporate t)
+    ;; Overlay 2: show the wrapped table as before-string
+    (let ((display-ov (make-overlay beg beg nil t nil)))
+      (overlay-put display-ov 'before-string
+                   (concat display-string "\n"))
+      (overlay-put display-ov 'org-table-wrap t)
+      (overlay-put display-ov 'evaporate t)
+      (push (list beg end invis-ov display-ov)
+            org-table-wrap--overlays))))
 
 (defun org-table-wrap--find-overlay-at (pos)
   "Find the org-table-wrap overlay entry covering POS."
@@ -662,37 +695,19 @@ interactive session, defers processing until the buffer is displayed."
 
 ;;;; Post-command hook (org-appear pattern)
 
-(defun org-table-wrap--overlay-at-point ()
-  "Return the (BEG . END) of an org-table-wrap overlay near point.
-Checks at point, point-1, and point+1 since display overlays make
-their region intangible and point jumps to the boundary."
-  (cl-loop for pos in (list (point)
-                            (max (point-min) (1- (point)))
-                            (min (point-max) (1+ (point))))
-           for entry = (org-table-wrap--find-overlay-at pos)
-           when entry
-           return (cons (nth 0 entry) (nth 1 entry))))
-
 (defun org-table-wrap--post-command ()
   "Track point movement relative to tables, toggling overlays.
-Since display overlays are intangible, detect entry by checking if
-point is at an overlay boundary rather than inside the table."
+With `invisible' overlays (not `display'), point can traverse the
+table region normally, so `org-at-table-p' works."
   (when (and org-table-wrap-mode (derived-mode-p 'org-mode))
-    (let ((in-table (or (org-table-wrap--point-in-table-p)
-                        ;; Also check overlay boundaries for intangible overlays
-                        (org-table-wrap--overlay-at-point))))
+    (let ((in-table (org-table-wrap--point-in-table-p)))
       (cond
-       ;; Point entered a table (or hit its overlay boundary)
+       ;; Point entered a table
        ((and in-table (not org-table-wrap--current-table))
         (setq org-table-wrap--current-table in-table)
         ;; Remove the overlay so user can edit
         (org-table-wrap--remove-overlay-at
-         (car in-table) (cdr in-table))
-        ;; Move point into the table
-        (when (< (point) (car in-table))
-          (goto-char (car in-table)))
-        (when (>= (point) (cdr in-table))
-          (goto-char (1- (cdr in-table)))))
+         (car in-table) (cdr in-table)))
        ;; Point moved to a different table
        ((and in-table org-table-wrap--current-table
              (not (and (= (car in-table)

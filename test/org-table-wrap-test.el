@@ -217,11 +217,14 @@ Override the available width to WIDTH."
     (org-table-wrap-test-with-width 40 wide-table
       (org-table-wrap-mode 1)
       (should (= (length org-table-wrap--overlays) 1))
-      ;; Verify the overlay has a display property
+      ;; Verify the overlays: invisible + before-string
       (let* ((entry (car org-table-wrap--overlays))
-             (ov (nth 2 entry)))
-        (should (overlayp ov))
-        (should (stringp (overlay-get ov 'display))))
+             (invis-ov (nth 2 entry))
+             (display-ov (nth 3 entry)))
+        (should (overlayp invis-ov))
+        (should (eq (overlay-get invis-ov 'invisible) 'org-table-wrap))
+        (should (overlayp display-ov))
+        (should (stringp (overlay-get display-ov 'before-string))))
       (org-table-wrap-mode -1))))
 
 ;;;; Entering and leaving table toggles overlay
