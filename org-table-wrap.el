@@ -523,6 +523,10 @@ rendering).  DISPLAY-STRING is the wrapped rendering."
   (org-table-wrap--remove-overlay-at beg end)
   ;; Ensure our invisibility spec is registered
   (add-to-invisibility-spec '(org-table-wrap . t))
+  ;; Exclude trailing newline from the overlay so the invisible region
+  ;; ends at the last table character; otherwise the newline after the
+  ;; table would be swallowed and the before-string would merge with
+  ;; the following line.
   (let* ((ov-end (if (and (< end (point-max))
                           (= (char-before end) ?\n))
                      (1- end)
@@ -557,6 +561,8 @@ to handle font rendering and display scaling differences."
                (raw-width (window-body-width win))
                (usable (- raw-width prefix-len)))
           (floor (* usable org-table-wrap-width-fraction)))
+      ;; No window available (batch mode); 60 is a conservative default
+      ;; that fits most terminal widths.
       60)))
 
 (defun org-table-wrap--rendered-line-pixel-width (win pos)
@@ -584,16 +590,23 @@ BEG and END are the table region bounds.  TARGET-CHAR-WIDTH is the
 window width in characters.  After applying the overlay, measures the
 actual rendered pixel width and shrinks columns if needed.  Returns
 the display string."
+  ;; Phase 1: character-based render using the pre-allocated column widths.
   (let* ((display-str (org-table-wrap--build-display-string rows col-widths))
          (win (or (get-buffer-window (current-buffer)) (selected-window)))
          (win-px (if (and (not noninteractive) win (window-live-p win))
                      (window-body-width win t)
                    (* target-char-width (frame-char-width)))))
+    ;; Phase 2: pixel-accurate fitting.  The character-based allocation
+    ;; above may still overflow because variable-width fonts, display
+    ;; scaling, and face remapping can make rendered pixels differ from
+    ;; character counts.  Measure the actual pixel width and shrink if
+    ;; needed.
     (when (and (not noninteractive) win (window-live-p win))
       (let ((rendered-px (org-table-wrap--apply-and-measure
                           win beg end display-str)))
         (when (> rendered-px win-px)
-          ;; Shrink all columns proportionally
+          ;; Phase 2a: proportional shrink — scale every column by the
+          ;; pixel overshoot ratio to get close to the target in one step.
           (let* ((ratio (/ (float win-px) (float rendered-px)))
                  (min-w org-table-wrap-min-column-width)
                  (ncols (length col-widths)))
@@ -604,7 +617,10 @@ the display string."
                   (org-table-wrap--build-display-string rows col-widths))
             (setq rendered-px
                   (org-table-wrap--apply-and-measure win beg end display-str))
-            ;; Fine-tune: shrink widest column by 1 until it fits
+            ;; Phase 2b: fine-tune — the proportional shrink often leaves a
+            ;; 1–3 character overshoot due to rounding.  Trim the widest
+            ;; column by 1 character per iteration until it fits.  Cap at 5
+            ;; iterations to avoid runaway loops if measurement is unstable.
             (let ((max-iter 5)
                   (iter 0))
               (while (and (< iter max-iter)
@@ -738,6 +754,8 @@ table region normally, so `org-at-table-p' works."
   (when org-table-wrap--resize-timer
     (cancel-timer org-table-wrap--resize-timer))
   (setq org-table-wrap--resize-timer
+        ;; 0.2 s idle delay: long enough to batch rapid resize events
+        ;; (e.g. dragging a window edge) but short enough to feel responsive.
         (run-with-idle-timer
          0.2 nil
          (lambda ()
