@@ -421,15 +421,16 @@ Returns a propertized string."
                          (nreverse cells-for-line) col-widths)
                         display-lines))))))
         (setq row-index (1+ row-index))))
-    ;; If the table didn't start or end with hlines, add borders
+    ;; Reverse to get correct order, then add missing borders
+    (setq display-lines (nreverse display-lines))
     (unless has-top-hline
       (push (org-table-wrap--build-hline col-widths 'top) display-lines))
-    (when (not has-bottom-hline)
+    (unless has-bottom-hline
       (setq display-lines
-            (cons (org-table-wrap--build-hline col-widths 'bottom)
-                  display-lines)))
-    ;; Reverse and join
-    (let ((result (mapconcat #'identity (nreverse display-lines) "\n")))
+            (append display-lines
+                    (list (org-table-wrap--build-hline col-widths 'bottom)))))
+    ;; Join into final string
+    (let ((result (mapconcat #'identity display-lines "\n")))
       ;; Apply org-table face to the entire string
       (put-text-property 0 (length result) 'face 'org-table result)
       result)))
