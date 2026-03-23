@@ -100,6 +100,8 @@ is too narrow for your setup."
         (cross      . "┼")
         (top-t      . "┬")
         (bottom-t   . "┴")
+        (left-t     . "├")
+        (right-t    . "┤")
         (top-left   . "┌")
         (top-right  . "┐")
         (bottom-left  . "└")
@@ -109,6 +111,8 @@ is too narrow for your setup."
       (cross      . "+")
       (top-t      . "+")
       (bottom-t   . "+")
+      (left-t     . "+")
+      (right-t    . "+")
       (top-left   . "+")
       (top-right  . "+")
       (bottom-left  . "+")
@@ -323,15 +327,14 @@ character-level wrapping for long words."
           (when current-line
             (push current-line lines)
             (setq current-line nil))
-          ;; Break the long word
-          (let ((pos 0)
-                (wlen (length word)))
-            (while (< pos wlen)
-              (let* ((end (min wlen (+ pos width)))
-                     (chunk (substring word pos end)))
-                ;; If we have a partial current-line, try to fit what we can
+          ;; Break the long word by display width
+          (let ((remaining word))
+            (while (> (string-width remaining) width)
+              (let ((chunk (truncate-string-to-width remaining width)))
                 (push chunk lines)
-                (setq pos end)))))
+                (setq remaining (substring remaining (length chunk)))))
+            (when (> (length remaining) 0)
+              (push remaining lines))))
          ;; First word on this line
          ((null current-line)
           (setq current-line word))
@@ -349,11 +352,11 @@ character-level wrapping for long words."
 ;;;; Display string construction
 
 (defun org-table-wrap--pad-cell (text width)
-  "Pad TEXT with spaces to fill WIDTH characters.
-Returns a string of exactly WIDTH characters."
+  "Pad TEXT with spaces to fill WIDTH display columns.
+Returns a string of exactly WIDTH display columns."
   (let ((text-width (string-width text)))
     (if (>= text-width width)
-        (substring text 0 (min (length text) width))
+        (truncate-string-to-width text width)
       (concat text (make-string (- width text-width) ?\s)))))
 
 (defun org-table-wrap--build-hline (col-widths position)
@@ -366,11 +369,11 @@ POSITION is one of `top', `middle', or `bottom'."
          (left (pcase position
                  ('top (org-table-wrap--char 'top-left))
                  ('bottom (org-table-wrap--char 'bottom-left))
-                 (_ (org-table-wrap--char 'vertical))))
+                 (_ (org-table-wrap--char 'left-t))))
          (right (pcase position
                   ('top (org-table-wrap--char 'top-right))
                   ('bottom (org-table-wrap--char 'bottom-right))
-                  (_ (org-table-wrap--char 'vertical))))
+                  (_ (org-table-wrap--char 'right-t))))
          (sep (pcase position
                 ('top (org-table-wrap--char 'top-t))
                 ('bottom (org-table-wrap--char 'bottom-t))
@@ -570,41 +573,56 @@ face remapping, text-scale-mode, and any other display modifications."
   "Build a display string from ROWS and COL-WIDTHS that fits the window.
 BEG and END are the table region bounds.  TARGET-CHAR-WIDTH is the
 window width in characters.  After applying the overlay, measures the
-actual rendered pixel width in the window and iteratively shrinks
-columns until the rendered output fits.  Returns the display string."
+actual rendered pixel width and computes a shrink ratio to resize all
+columns proportionally in one step.  Returns the display string."
   (let* ((display-str (org-table-wrap--build-display-string rows col-widths))
          (win (or (get-buffer-window (current-buffer)) (selected-window)))
          (win-px (if (and (not noninteractive) win (window-live-p win))
                      (window-body-width win t)
-                   (* target-char-width (frame-char-width))))
-         (max-iterations 30)
-         (iteration 0))
+                   (* target-char-width (frame-char-width)))))
     (when (and (not noninteractive) win (window-live-p win))
-      ;; Apply overlay temporarily to measure actual rendered width
+      ;; Apply overlay and measure actual rendered width
       (org-table-wrap--apply-overlay beg end display-str)
       (redisplay t)
       (let ((rendered-px (org-table-wrap--rendered-line-pixel-width win beg)))
-        (while (and (< iteration max-iterations)
-                    (> rendered-px win-px))
-          ;; Shrink the widest column by 2 (faster convergence)
-          (let ((widest-idx 0)
-                (widest-val 0))
-            (dotimes (i (length col-widths))
-              (when (> (aref col-widths i) widest-val)
-                (setq widest-val (aref col-widths i))
-                (setq widest-idx i)))
-            (when (<= widest-val org-table-wrap-min-column-width)
-              (setq iteration max-iterations))
-            (aset col-widths widest-idx
-                  (max org-table-wrap-min-column-width
-                       (- (aref col-widths widest-idx) 2))))
-          (setq display-str
-                (org-table-wrap--build-display-string rows col-widths))
-          (org-table-wrap--apply-overlay beg end display-str)
-          (redisplay t)
-          (setq rendered-px
-                (org-table-wrap--rendered-line-pixel-width win beg))
-          (setq iteration (1+ iteration)))))
+        (when (> rendered-px win-px)
+          ;; Compute shrink ratio and apply proportionally to all columns
+          (let* ((ratio (/ (float win-px) (float rendered-px)))
+                 (min-w org-table-wrap-min-column-width)
+                 (ncols (length col-widths)))
+            (dotimes (i ncols)
+              (aset col-widths i
+                    (max min-w (floor (* (aref col-widths i) ratio)))))
+            (setq display-str
+                  (org-table-wrap--build-display-string rows col-widths))
+            ;; One verification pass: measure again and fine-tune if needed
+            (org-table-wrap--apply-overlay beg end display-str)
+            (redisplay t)
+            (setq rendered-px
+                  (org-table-wrap--rendered-line-pixel-width win beg))
+            (when (> rendered-px win-px)
+              ;; Shrink widest column by 1 until it fits (at most a few iterations)
+              (let ((max-fine-tune 5)
+                    (iter 0))
+                (while (and (< iter max-fine-tune)
+                            (> rendered-px win-px))
+                  (let ((widest-idx 0)
+                        (widest-val 0))
+                    (dotimes (i ncols)
+                      (when (> (aref col-widths i) widest-val)
+                        (setq widest-val (aref col-widths i))
+                        (setq widest-idx i)))
+                    (when (<= widest-val min-w)
+                      (setq iter max-fine-tune))
+                    (aset col-widths widest-idx
+                          (max min-w (1- (aref col-widths widest-idx)))))
+                  (setq display-str
+                        (org-table-wrap--build-display-string rows col-widths))
+                  (org-table-wrap--apply-overlay beg end display-str)
+                  (redisplay t)
+                  (setq rendered-px
+                        (org-table-wrap--rendered-line-pixel-width win beg))
+                  (setq iter (1+ iter)))))))))
     display-str))
 
 (defun org-table-wrap--process-table (beg end)
@@ -619,17 +637,17 @@ Apply a wrapping overlay if the table overflows the window."
       (font-lock-ensure beg end)  ; ensure text properties are up to date
       (save-excursion
         (goto-char beg)  ; ensure point is at the table for prefix measurement
-      (let* ((rows (org-table-wrap--parse-table beg end))
-             (ncols (org-table-wrap--num-columns rows))
-             (border-overhead (+ (1+ ncols) ; ncols+1 vertical separators
-                                 (* 2 org-table-wrap-padding ncols)))
-             (avail (max (* ncols org-table-wrap-min-column-width)
-                         (- win-width border-overhead)))
-             (natural (org-table-wrap--natural-widths rows ncols))
-             (col-widths (org-table-wrap--allocate-widths natural avail))
-             (display-str (org-table-wrap--fit-display
-                           rows col-widths beg end win-width)))
-        (org-table-wrap--apply-overlay beg end display-str))))))
+        (let* ((rows (org-table-wrap--parse-table beg end))
+               (ncols (org-table-wrap--num-columns rows))
+               (border-overhead (+ (1+ ncols) ; ncols+1 vertical separators
+                                   (* 2 org-table-wrap-padding ncols)))
+               (avail (max (* ncols org-table-wrap-min-column-width)
+                           (- win-width border-overhead)))
+               (natural (org-table-wrap--natural-widths rows ncols))
+               (col-widths (org-table-wrap--allocate-widths natural avail))
+               (display-str (org-table-wrap--fit-display
+                             rows col-widths beg end win-width)))
+          (org-table-wrap--apply-overlay beg end display-str))))))
 
 (defun org-table-wrap--process-buffer ()
   "Process all tables in the current buffer.
@@ -756,12 +774,17 @@ modified."
         (add-hook 'window-size-change-functions
                   #'org-table-wrap--window-size-changed))
     (remove-hook 'post-command-hook #'org-table-wrap--post-command t)
-    (remove-hook 'window-size-change-functions
-                 #'org-table-wrap--window-size-changed)
     (remove-hook 'window-configuration-change-hook
                  #'org-table-wrap--deferred-process t)
     (org-table-wrap--remove-overlays)
-    (setq org-table-wrap--current-table nil)))
+    (setq org-table-wrap--current-table nil)
+    ;; Only remove the global resize hook when no other buffer uses the mode
+    (unless (cl-some (lambda (buf)
+                       (and (not (eq buf (current-buffer)))
+                            (buffer-local-value 'org-table-wrap-mode buf)))
+                     (buffer-list))
+      (remove-hook 'window-size-change-functions
+                   #'org-table-wrap--window-size-changed))))
 
 (defun org-table-wrap--org-mode-hook ()
   "Enable `org-table-wrap-mode' in Org buffers."

@@ -157,10 +157,12 @@ Override the available width to WIDTH."
       (should (string-match-p "┬" hline)))))
 
 (ert-deftest org-table-wrap-test-hline-middle ()
-  "Middle hline uses cross characters."
+  "Middle hline uses correct left-t, cross, and right-t characters."
   (let ((org-table-wrap-use-unicode t)
         (org-table-wrap-padding 1))
     (let ((hline (org-table-wrap--build-hline (vector 3 4) 'middle)))
+      (should (string-prefix-p "├" hline))
+      (should (string-suffix-p "┤" hline))
       (should (string-match-p "┼" hline)))))
 
 (ert-deftest org-table-wrap-test-hline-bottom ()
