@@ -67,6 +67,15 @@ When nil, use ASCII characters (`|', `-', `+')."
   "Number of spaces between cell content and column border."
   :type 'integer)
 
+(defcustom org-table-wrap-width-fraction 0.75
+  "Fraction of the window width to use for the wrapped table.
+A value of 1.0 uses the full window width.  Lower values add a
+safety margin that compensates for font rendering differences,
+display scaling, and `org-indent-mode' prefix overhead.  The
+default of 0.75 is conservative; increase it if the wrapped table
+is too narrow for your setup."
+  :type 'float)
+
 ;;;; Internal variables
 
 ;; Forward declaration; defined by `define-minor-mode' below.
@@ -492,74 +501,70 @@ DISPLAY-STRING is the wrapped rendering."
 
 (defun org-table-wrap--available-width (&optional pos)
   "Return the available width for table rendering in the current window.
-Subtracts `line-prefix' width (from `org-indent-mode' etc.) since it
-is applied to every visual line in the overlay display."
+Subtracts `line-prefix' width and applies `org-table-wrap-width-fraction'
+to handle font rendering and display scaling differences."
   (let ((win (and (not noninteractive)
                   (or (get-buffer-window (current-buffer))
                       (selected-window)))))
     (if (and win (window-live-p win))
         (let* ((prefix (get-text-property (or pos (point)) 'line-prefix))
-               (prefix-len (if (stringp prefix) (length prefix) 0)))
-          (- (window-body-width win) prefix-len))
-      80)))
+               (prefix-len (if (stringp prefix) (length prefix) 0))
+               (raw-width (window-body-width win))
+               (usable (- raw-width prefix-len)))
+          (floor (* usable org-table-wrap-width-fraction)))
+      60)))
 
-(defun org-table-wrap--max-line-pixel-width (str)
-  "Return the maximum pixel width among all lines in STR.
-Uses `string-pixel-width' which respects text properties (face, etc.)."
-  (let ((max-px 0))
-    (dolist (line (split-string str "\n"))
-      (let ((px (string-pixel-width line)))
-        (when (> px max-px)
-          (setq max-px px))))
-    max-px))
+(defun org-table-wrap--rendered-line-pixel-width (win pos)
+  "Return the pixel width of the visual line at POS as rendered in WIN.
+This measures the actual rendered output, accounting for overlays,
+face remapping, text-scale-mode, and any other display modifications."
+  (with-selected-window win
+    (save-excursion
+      (goto-char pos)
+      (car (window-text-pixel-size
+            win
+            (line-beginning-position)
+            (line-end-position))))))
 
-(defun org-table-wrap--line-prefix-pixel-width (pos)
-  "Return the pixel width of the `line-prefix' at buffer position POS.
-Returns 0 if there is no prefix."
-  (let ((prefix (get-text-property pos 'line-prefix)))
-    (if (stringp prefix)
-        (string-pixel-width prefix)
-      0)))
-
-(defun org-table-wrap--fit-display (rows col-widths target-char-width)
+(defun org-table-wrap--fit-display (rows col-widths beg end target-char-width)
   "Build a display string from ROWS and COL-WIDTHS that fits the window.
-TARGET-CHAR-WIDTH is the window width in characters.  If the built
-string exceeds the window's pixel width (due to Unicode characters
-being wider than ASCII, or `line-prefix' from `org-indent-mode'),
-iteratively shrink the widest column and rebuild until it fits.
-Returns the display string."
+BEG and END are the table region bounds.  TARGET-CHAR-WIDTH is the
+window width in characters.  After applying the overlay, measures the
+actual rendered pixel width in the window and iteratively shrinks
+columns until the rendered output fits.  Returns the display string."
   (let* ((display-str (org-table-wrap--build-display-string rows col-widths))
          (win (or (get-buffer-window (current-buffer)) (selected-window)))
          (win-px (if (and (not noninteractive) win (window-live-p win))
-                     ;; Subtract line-prefix pixel width since it gets
-                     ;; applied to every visual line in the display
-                     (- (window-body-width win t)
-                        (org-table-wrap--line-prefix-pixel-width (point)))
-                   ;; Batch mode: approximate
+                     (window-body-width win t)
                    (* target-char-width (frame-char-width))))
-         (max-iterations 20)
+         (max-iterations 30)
          (iteration 0))
-    ;; Only do pixel fitting in interactive mode
-    (when (not noninteractive)
-      (while (and (< iteration max-iterations)
-                  (> (org-table-wrap--max-line-pixel-width display-str)
-                     win-px))
-        ;; Shrink the widest column by 1
-        (let ((widest-idx 0)
-              (widest-val 0))
-          (dotimes (i (length col-widths))
-            (when (> (aref col-widths i) widest-val)
-              (setq widest-val (aref col-widths i))
-              (setq widest-idx i)))
-          (when (<= widest-val org-table-wrap-min-column-width)
-            ;; Can't shrink further
-            (setq iteration max-iterations))
-          (aset col-widths widest-idx
-                (max org-table-wrap-min-column-width
-                     (1- (aref col-widths widest-idx)))))
-        (setq display-str
-              (org-table-wrap--build-display-string rows col-widths))
-        (setq iteration (1+ iteration))))
+    (when (and (not noninteractive) win (window-live-p win))
+      ;; Apply overlay temporarily to measure actual rendered width
+      (org-table-wrap--apply-overlay beg end display-str)
+      (redisplay t)
+      (let ((rendered-px (org-table-wrap--rendered-line-pixel-width win beg)))
+        (while (and (< iteration max-iterations)
+                    (> rendered-px win-px))
+          ;; Shrink the widest column by 2 (faster convergence)
+          (let ((widest-idx 0)
+                (widest-val 0))
+            (dotimes (i (length col-widths))
+              (when (> (aref col-widths i) widest-val)
+                (setq widest-val (aref col-widths i))
+                (setq widest-idx i)))
+            (when (<= widest-val org-table-wrap-min-column-width)
+              (setq iteration max-iterations))
+            (aset col-widths widest-idx
+                  (max org-table-wrap-min-column-width
+                       (- (aref col-widths widest-idx) 2))))
+          (setq display-str
+                (org-table-wrap--build-display-string rows col-widths))
+          (org-table-wrap--apply-overlay beg end display-str)
+          (redisplay t)
+          (setq rendered-px
+                (org-table-wrap--rendered-line-pixel-width win beg))
+          (setq iteration (1+ iteration)))))
     display-str))
 
 (defun org-table-wrap--process-table (beg end)
@@ -582,7 +587,7 @@ Apply a wrapping overlay if the table overflows the window."
              (natural (org-table-wrap--natural-widths rows ncols))
              (col-widths (org-table-wrap--allocate-widths natural avail))
              (display-str (org-table-wrap--fit-display
-                           rows col-widths win-width)))
+                           rows col-widths beg end win-width)))
         (org-table-wrap--apply-overlay beg end display-str))))))
 
 (defun org-table-wrap--process-buffer ()
