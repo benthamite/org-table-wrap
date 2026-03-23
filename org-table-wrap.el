@@ -133,16 +133,37 @@ Only includes tables that are visible (not inside folded headings/drawers)."
     (nreverse tables)))
 
 (defun org-table-wrap--table-width (beg end)
-  "Return the maximum line width of the table between BEG and END."
-  (let ((max-width 0))
-    (save-excursion
-      (goto-char beg)
-      (while (< (point) end)
-        (let ((line-len (- (line-end-position) (line-beginning-position))))
-          (when (> line-len max-width)
-            (setq max-width line-len)))
-        (forward-line 1)))
-    max-width))
+  "Return the maximum display width of the table between BEG and END.
+This accounts for `line-prefix' (e.g. from `org-indent-mode') by
+measuring pixel widths when a window is available, then converting
+back to character columns."
+  (let ((win (get-buffer-window (current-buffer))))
+    (if (and win (window-live-p win))
+        ;; Pixel-accurate measurement
+        (let ((max-pixel 0))
+          (save-excursion
+            (goto-char beg)
+            (while (< (point) end)
+              (let ((pw (car (window-text-pixel-size
+                              win
+                              (line-beginning-position)
+                              (line-end-position)))))
+                (when (> pw max-pixel)
+                  (setq max-pixel pw)))
+              (forward-line 1)))
+          ;; Convert pixels to character columns using the default char width
+          (let ((char-width (frame-char-width (window-frame win))))
+            (ceiling (/ (float max-pixel) char-width))))
+      ;; No window: fall back to character count
+      (let ((max-width 0))
+        (save-excursion
+          (goto-char beg)
+          (while (< (point) end)
+            (let ((line-len (- (line-end-position) (line-beginning-position))))
+              (when (> line-len max-width)
+                (setq max-width line-len)))
+            (forward-line 1)))
+        max-width))))
 
 (defun org-table-wrap--point-in-table-p ()
   "Return (BEG . END) if point is inside an Org table, nil otherwise."
@@ -462,9 +483,18 @@ DISPLAY-STRING is the wrapped rendering."
 ;;;; Core logic
 
 (defun org-table-wrap--available-width ()
-  "Return the available width for table rendering in the current window."
+  "Return the available width for table rendering in the current window.
+Accounts for `line-prefix' from `org-indent-mode' and similar."
   (if (window-live-p (selected-window))
-      (window-body-width)
+      (let* ((win (selected-window))
+             (pixel-width (window-body-width win t))
+             (char-width (frame-char-width (window-frame win)))
+             ;; Check for line-prefix at point (e.g. from org-indent-mode)
+             (prefix (or (get-text-property (point) 'line-prefix) ""))
+             (prefix-pixel (if (stringp prefix)
+                               (* (length prefix) char-width)
+                             0)))
+        (floor (/ (float (- pixel-width prefix-pixel)) char-width)))
     80))
 
 (defun org-table-wrap--process-table (beg end)
