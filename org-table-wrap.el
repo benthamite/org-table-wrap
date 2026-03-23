@@ -473,6 +473,11 @@ DISPLAY-STRING is the wrapped rendering."
     (overlay-put ov 'display display-string)
     (overlay-put ov 'org-table-wrap t)
     (overlay-put ov 'evaporate t)
+    ;; Override org-indent's line-prefix and wrap-prefix so they don't
+    ;; add indentation to every visual line within the display string.
+    ;; The display string is already sized to fit the full window width.
+    (overlay-put ov 'line-prefix "")
+    (overlay-put ov 'wrap-prefix "")
     (push (list beg end ov) org-table-wrap--overlays)))
 
 (defun org-table-wrap--find-overlay-at (pos)
@@ -485,23 +490,15 @@ DISPLAY-STRING is the wrapped rendering."
 
 ;;;; Core logic
 
-(defun org-table-wrap--available-width (&optional pos)
+(defun org-table-wrap--available-width (&optional _pos)
   "Return the available width for table rendering in the current window.
-POS is a buffer position used to check for `line-prefix' (e.g. from
-`org-indent-mode').  Defaults to point.
-Uses the buffer's window, falling back to the selected window."
+The overlay suppresses `line-prefix' and `wrap-prefix', so the full
+window body width is available."
   (let ((win (and (not noninteractive)
                   (or (get-buffer-window (current-buffer))
                       (selected-window)))))
     (if (and win (window-live-p win))
-        (let* ((pixel-width (window-body-width win t))
-               (char-width (frame-char-width (window-frame win)))
-               ;; Check for line-prefix at the relevant position
-               (prefix (or (get-text-property (or pos (point)) 'line-prefix) ""))
-               (prefix-pixel (if (stringp prefix)
-                                 (* (length prefix) char-width)
-                               0)))
-          (floor (/ (float (- pixel-width prefix-pixel)) char-width)))
+        (window-body-width win)
       80)))
 
 (defun org-table-wrap--process-table (beg end)
