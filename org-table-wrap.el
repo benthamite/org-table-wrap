@@ -98,15 +98,12 @@ is too narrow for your setup."
       '((vertical   . "│")
         (horizontal . "─")
         (cross      . "┼")
-        ;; Use │ and ┼ for all positions to ensure consistent glyph
-        ;; widths.  Corner characters (┌┐└┘) and T-junctions (┬┴)
-        ;; often have different widths, causing misalignment.
-        (top-t      . "┼")
-        (bottom-t   . "┼")
-        (top-left   . "│")
-        (top-right  . "│")
-        (bottom-left  . "│")
-        (bottom-right . "│"))
+        (top-t      . "┬")
+        (bottom-t   . "┴")
+        (top-left   . "┌")
+        (top-right  . "┐")
+        (bottom-left  . "└")
+        (bottom-right . "┘"))
     '((vertical   . "|")
       (horizontal . "-")
       (cross      . "+")
@@ -410,23 +407,13 @@ CELLS is a list of strings (one per column).  Pads to fill COL-WIDTHS."
   "Build the full display string for a wrapped table.
 ROWS is the parsed table, COL-WIDTHS is the allocated width vector.
 Returns a propertized string."
-  (let (display-lines
-        (has-top-hline (eq (car rows) 'hline))
-        (has-bottom-hline (eq (car (last rows)) 'hline)))
+  (let (display-lines)
     ;; Process each row
-    (let ((row-index 0)
-          (nrows (length rows)))
-      (dolist (row rows)
-        (let ((is-first (= row-index 0))
-              (is-last (= row-index (1- nrows))))
-          (if (eq row 'hline)
-              ;; Hline row
-              (let ((position (cond
-                               (is-first 'top)
-                               (is-last 'bottom)
-                               (t 'middle))))
-                (push (org-table-wrap--build-hline col-widths position)
-                      display-lines))
+    (dolist (row rows)
+      (if (eq row 'hline)
+          ;; Hline row (always 'middle' — no auto-generated borders)
+          (push (org-table-wrap--build-hline col-widths 'middle)
+                display-lines)
             ;; Data row: wrap cells and build multiple display lines
             (let* ((ncols (length col-widths))
                    (wrapped-cells
@@ -453,15 +440,10 @@ Returns a propertized string."
                   (push (org-table-wrap--build-data-line
                          (nreverse cells-for-line) col-widths)
                         display-lines))))))
-        (setq row-index (1+ row-index))))
-    ;; Reverse to get correct order, then add missing borders
+    ;; Reverse to get correct order (no auto-generated borders —
+    ;; the ─ character has a different pixel width than space in most
+    ;; fonts, so auto-borders would misalign with data rows)
     (setq display-lines (nreverse display-lines))
-    (unless has-top-hline
-      (push (org-table-wrap--build-hline col-widths 'top) display-lines))
-    (unless has-bottom-hline
-      (setq display-lines
-            (append display-lines
-                    (list (org-table-wrap--build-hline col-widths 'bottom)))))
     ;; Join into final string
     (let ((result (mapconcat #'identity display-lines "\n")))
       ;; Add org-table face without overwriting existing faces (bold, etc.)

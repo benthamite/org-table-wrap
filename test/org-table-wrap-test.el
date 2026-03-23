@@ -135,8 +135,8 @@ Override the available width to WIDTH."
     (should (equal (org-table-wrap--char 'vertical) "│"))
     (should (equal (org-table-wrap--char 'horizontal) "─"))
     (should (equal (org-table-wrap--char 'cross) "┼"))
-    (should (equal (org-table-wrap--char 'top-left) "│"))
-    (should (equal (org-table-wrap--char 'bottom-right) "│"))))
+    (should (equal (org-table-wrap--char 'top-left) "┌"))
+    (should (equal (org-table-wrap--char 'bottom-right) "┘"))))
 
 (ert-deftest org-table-wrap-test-ascii-borders ()
   "ASCII border characters are used when unicode is disabled."
@@ -152,9 +152,9 @@ Override the available width to WIDTH."
   (let ((org-table-wrap-use-unicode t)
         (org-table-wrap-padding 1))
     (let ((hline (org-table-wrap--build-hline (vector 3 4) 'top)))
-      (should (string-prefix-p "│" hline))
-      (should (string-suffix-p "│" hline))
-      (should (string-match-p "┼" hline)))))
+      (should (string-prefix-p "┌" hline))
+      (should (string-suffix-p "┐" hline))
+      (should (string-match-p "┬" hline)))))
 
 (ert-deftest org-table-wrap-test-hline-middle ()
   "Middle hline uses cross characters."
@@ -168,9 +168,9 @@ Override the available width to WIDTH."
   (let ((org-table-wrap-use-unicode t)
         (org-table-wrap-padding 1))
     (let ((hline (org-table-wrap--build-hline (vector 3 4) 'bottom)))
-      (should (string-prefix-p "│" hline))
-      (should (string-suffix-p "│" hline))
-      (should (string-match-p "┼" hline)))))
+      (should (string-prefix-p "└" hline))
+      (should (string-suffix-p "┘" hline))
+      (should (string-match-p "┴" hline)))))
 
 ;;;; Display string tests
 
@@ -285,10 +285,11 @@ Override the available width to WIDTH."
          (widths (vector 8 8))
          (display (org-table-wrap--build-display-string rows widths))
          (lines (split-string display "\n")))
-    ;; First line should be a top hline
+    ;; First line should be a top hline (from the table's own hline)
     (should (string-prefix-p "│" (nth 0 lines)))
-    ;; Last line should be a bottom hline
+    ;; Last line should be a bottom hline (from the table's own hline)
     (should (string-prefix-p "│" (nth 2 lines)))
+    ;; Note: these are 'middle' position hlines since no auto-borders
     ;; All hlines should use ─
     (should (string-match-p "─" (nth 0 lines)))
     (should (string-match-p "─" (nth 2 lines)))))
@@ -303,11 +304,10 @@ Override the available width to WIDTH."
          (widths (vector 5 7))
          (display (org-table-wrap--build-display-string rows widths))
          (lines (split-string display "\n")))
-    ;; Should have 2 data lines (no hlines added since rows don't start/end
-    ;; with hline, but top/bottom borders are added)
-    (should (= (length lines) 4))  ; top-border + 2 data + bottom-border
+    ;; Should have 2 data lines (no auto-generated borders)
+    (should (= (length lines) 2))
     ;; The first data line should contain empty first cell
-    (let ((line (nth 1 lines)))
+    (let ((line (nth 0 lines)))
       (should (string-match-p "│" line)))))
 
 ;;;; Window resize triggers re-evaluation
@@ -350,10 +350,9 @@ Override the available width to WIDTH."
          (widths (vector 10 5))
          (display (org-table-wrap--build-display-string rows widths))
          (lines (split-string display "\n")))
-    ;; Should have top border + multiple data lines + bottom border
     ;; "hello world is great ok" wrapping at width 10:
-    ;; "hello" "world is" "great ok" -> 3 lines
-    (should (> (length lines) 3))))
+    ;; "hello" "world is" "great ok" -> 3 data lines (no auto-borders)
+    (should (>= (length lines) 3))))
 
 ;;;; Text properties preservation
 
