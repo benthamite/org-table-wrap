@@ -1,4 +1,4 @@
-# `org-table-wrap`: Visual word-wrapping for Org mode tables
+# `org-table-wrap`: Visual word-wrapping for Org tables
 
 Org mode tables are plain-text constructs where every cell must fit on a single line. When a table has many columns or long cell content, it overflows the window and forces horizontal scrolling. `org-table-wrap` fixes this by rendering overflowing tables with word-wrapped cells using overlays — the buffer text is never modified.
 
