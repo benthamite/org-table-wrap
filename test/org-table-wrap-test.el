@@ -26,7 +26,7 @@ The buffer is set to org-mode and has a fixed window width of 40."
      (goto-char (point-min))
      ;; Override available width to 40 for deterministic tests
      (cl-letf (((symbol-function 'org-table-wrap--available-width)
-                (lambda () 40)))
+                (lambda (&optional _pos) 40)))
        ,@body)))
 
 (defmacro org-table-wrap-test-with-width (width content &rest body)
@@ -38,7 +38,7 @@ Override the available width to WIDTH."
      (insert ,content)
      (goto-char (point-min))
      (cl-letf (((symbol-function 'org-table-wrap--available-width)
-                (lambda () ,width)))
+                (lambda (&optional _pos) ,width)))
        ,@body)))
 
 ;;;; Parsing tests

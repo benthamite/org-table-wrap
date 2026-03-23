@@ -137,9 +137,11 @@ Only includes tables that are visible (not inside folded headings/drawers)."
 This accounts for `line-prefix' (e.g. from `org-indent-mode') by
 measuring pixel widths when a window is available, then converting
 back to character columns."
-  (let ((win (get-buffer-window (current-buffer))))
+  (let ((win (and (not noninteractive)
+                  (or (get-buffer-window (current-buffer))
+                      (selected-window)))))
     (if (and win (window-live-p win))
-        ;; Pixel-accurate measurement
+        ;; Pixel-accurate measurement (GUI/terminal)
         (let ((max-pixel 0))
           (save-excursion
             (goto-char beg)
@@ -154,7 +156,7 @@ back to character columns."
           ;; Convert pixels to character columns using the default char width
           (let ((char-width (frame-char-width (window-frame win))))
             (ceiling (/ (float max-pixel) char-width))))
-      ;; No window: fall back to character count
+      ;; No usable window (batch mode): fall back to character count
       (let ((max-width 0))
         (save-excursion
           (goto-char beg)
@@ -482,26 +484,30 @@ DISPLAY-STRING is the wrapped rendering."
 
 ;;;; Core logic
 
-(defun org-table-wrap--available-width ()
+(defun org-table-wrap--available-width (&optional pos)
   "Return the available width for table rendering in the current window.
-Accounts for `line-prefix' from `org-indent-mode' and similar."
-  (if (window-live-p (selected-window))
-      (let* ((win (selected-window))
-             (pixel-width (window-body-width win t))
-             (char-width (frame-char-width (window-frame win)))
-             ;; Check for line-prefix at point (e.g. from org-indent-mode)
-             (prefix (or (get-text-property (point) 'line-prefix) ""))
-             (prefix-pixel (if (stringp prefix)
-                               (* (length prefix) char-width)
-                             0)))
-        (floor (/ (float (- pixel-width prefix-pixel)) char-width)))
-    80))
+POS is a buffer position used to check for `line-prefix' (e.g. from
+`org-indent-mode').  Defaults to point.
+Uses the buffer's window, falling back to the selected window."
+  (let ((win (and (not noninteractive)
+                  (or (get-buffer-window (current-buffer))
+                      (selected-window)))))
+    (if (and win (window-live-p win))
+        (let* ((pixel-width (window-body-width win t))
+               (char-width (frame-char-width (window-frame win)))
+               ;; Check for line-prefix at the relevant position
+               (prefix (or (get-text-property (or pos (point)) 'line-prefix) ""))
+               (prefix-pixel (if (stringp prefix)
+                                 (* (length prefix) char-width)
+                               0)))
+          (floor (/ (float (- pixel-width prefix-pixel)) char-width)))
+      80)))
 
 (defun org-table-wrap--process-table (beg end)
   "Process a single table between BEG and END.
 Apply a wrapping overlay if the table overflows the window."
   (let* ((table-width (org-table-wrap--table-width beg end))
-         (win-width (org-table-wrap--available-width)))
+         (win-width (org-table-wrap--available-width beg)))
     (if (<= table-width win-width)
         ;; Table fits; remove any existing overlay
         (org-table-wrap--remove-overlay-at beg end)
