@@ -43,6 +43,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'org)
 (require 'org-table)
 (require 'org-element)
@@ -82,13 +83,44 @@ is too narrow for your setup."
 (defvar org-table-wrap-mode)
 
 (defvar-local org-table-wrap--overlays nil
-  "List of (BEG END OVERLAY) entries for wrapped tables in this buffer.")
+  "List of (BEG-MARKER END-MARKER OVERLAY) entries for wrapped tables.")
 
 (defvar-local org-table-wrap--current-table nil
   "Cons of (BEG . END) for the table point is currently inside, or nil.")
 
 (defvar org-table-wrap--resize-timer nil
   "Idle timer for debouncing window resize events.")
+
+(defun org-table-wrap--make-overlay-entry (beg end overlay)
+  "Return an overlay entry for table bounds BEG..END and OVERLAY.
+The bounds are stored as live markers so they keep tracking the table
+when text is inserted elsewhere in the buffer."
+  (list (copy-marker beg t) (copy-marker end) overlay))
+
+(defun org-table-wrap--overlay-entry-beg (entry)
+  "Return the current table start for overlay ENTRY."
+  (marker-position (nth 0 entry)))
+
+(defun org-table-wrap--overlay-entry-end (entry)
+  "Return the current table end for overlay ENTRY."
+  (marker-position (nth 1 entry)))
+
+(defun org-table-wrap--clear-overlay-entry (entry)
+  "Release the markers held by overlay ENTRY."
+  (set-marker (nth 0 entry) nil)
+  (set-marker (nth 1 entry) nil))
+
+(defun org-table-wrap--ranges-overlap-p (a b)
+  "Return non-nil when table bounds A and B overlap."
+  (and a b
+       (< (car a) (cdr b))
+       (< (car b) (cdr a))))
+
+(defun org-table-wrap--same-table-p (a b)
+  "Return non-nil when A and B refer to the same logical table."
+  (and a b
+       (or (equal a b)
+           (org-table-wrap--ranges-overlap-p a b))))
 
 ;;;; Border characters
 
@@ -134,7 +166,8 @@ Only includes tables that are visible (not inside folded headings/drawers)."
       (while (re-search-forward "^[ \t]*|" nil t)
         (let ((start (line-beginning-position)))
           ;; Check if this line is visible
-          (when (not (org-invisible-p (point)))
+          (when (and (not (org-invisible-p (point)))
+                     (org-at-table-p))
             ;; Find the extent of this table
             (let ((end (org-table-end)))
               ;; Skip if we already captured this table
@@ -211,18 +244,18 @@ handles Org emphasis markers hidden by `org-hide-emphasis-markers'."
   "Parse an Org table LINE into a list of cell content strings.
 Returns nil if LINE is an hline."
   (when (string-match "^[ \t]*|" line)
-    (if (string-match "^[ \t]*|[-+]" line)
-        ;; This is an hline
-        'hline
-      ;; Data row: split by |
-      (let* ((trimmed (string-trim line))
-             ;; Remove leading and trailing |
-             (inner (if (and (string-prefix-p "|" trimmed)
-                             (string-suffix-p "|" trimmed))
-                        (substring trimmed 1 -1)
-                      (string-remove-prefix "|" trimmed)))
-             (cells (split-string inner "|")))
-        (mapcar #'string-trim cells)))))
+    (let* ((trimmed (string-trim line))
+           ;; Remove leading and trailing |.
+           (inner (if (and (string-prefix-p "|" trimmed)
+                           (string-suffix-p "|" trimmed))
+                      (substring trimmed 1 -1)
+                    (string-remove-prefix "|" trimmed))))
+      (if (and (string-prefix-p "|" trimmed)
+               (string-suffix-p "|" trimmed)
+               (string-match-p "\\`[-+]+\\'" inner))
+          'hline
+        ;; Data row: split by |
+        (mapcar #'string-trim (split-string inner "|"))))))
 
 (defun org-table-wrap--parse-table (beg end)
   "Parse the Org table between BEG and END.
@@ -496,7 +529,8 @@ Merges FACE with any existing faces at each position."
   (dolist (entry org-table-wrap--overlays)
     (let ((ov (nth 2 entry)))
       (when (overlayp ov)
-        (delete-overlay ov))))
+        (delete-overlay ov)))
+    (org-table-wrap--clear-overlay-entry entry))
   (setq org-table-wrap--overlays nil)
   ;; Remove our invisibility spec
   (remove-from-invisibility-spec '(org-table-wrap . t)))
@@ -506,11 +540,12 @@ Merges FACE with any existing faces at each position."
   (setq org-table-wrap--overlays
         (cl-remove-if
          (lambda (entry)
-           (when (and (= (nth 0 entry) beg)
-                      (= (nth 1 entry) end))
+           (when (and (= (org-table-wrap--overlay-entry-beg entry) beg)
+                      (= (org-table-wrap--overlay-entry-end entry) end))
              (let ((ov (nth 2 entry)))
                (when (overlayp ov)
                  (delete-overlay ov)))
+             (org-table-wrap--clear-overlay-entry entry)
              t))
          org-table-wrap--overlays)))
 
@@ -527,23 +562,27 @@ rendering).  DISPLAY-STRING is the wrapped rendering."
   ;; ends at the last table character; otherwise the newline after the
   ;; table would be swallowed and the before-string would merge with
   ;; the following line.
-  (let* ((ov-end (if (and (< end (point-max))
-                          (= (char-before end) ?\n))
+  (let* ((has-trailing-newline (and (> end beg)
+                                    (= (char-before end) ?\n)))
+         (ov-end (if has-trailing-newline
                      (1- end)
                    end))
          (ov (make-overlay beg ov-end nil nil nil)))
     (overlay-put ov 'invisible 'org-table-wrap)
-    (overlay-put ov 'before-string (concat display-string "\n"))
+    (overlay-put ov 'before-string
+                 (concat display-string
+                         (if has-trailing-newline "\n" "")))
     (overlay-put ov 'org-table-wrap t)
     (overlay-put ov 'evaporate t)
-    (push (list beg end ov) org-table-wrap--overlays)))
+    (push (org-table-wrap--make-overlay-entry beg end ov)
+          org-table-wrap--overlays)))
 
 (defun org-table-wrap--find-overlay-at (pos)
   "Find the org-table-wrap overlay entry covering POS."
   (cl-find-if
    (lambda (entry)
-     (and (<= (nth 0 entry) pos)
-          (< pos (nth 1 entry))))
+     (and (<= (org-table-wrap--overlay-entry-beg entry) pos)
+          (< pos (org-table-wrap--overlay-entry-end entry))))
    org-table-wrap--overlays))
 
 ;;;; Core logic
@@ -705,21 +744,23 @@ interactive session, defers processing until the buffer is displayed."
         (dolist (entry org-table-wrap--overlays)
           (let ((found nil))
             (dolist (tbl tables)
-              (when (and (= (nth 0 entry) (nth 0 tbl))
-                         (= (nth 1 entry) (nth 1 tbl)))
+              (when (and (= (org-table-wrap--overlay-entry-beg entry)
+                            (nth 0 tbl))
+                         (= (org-table-wrap--overlay-entry-end entry)
+                            (nth 1 tbl)))
                 (setq found t)))
             (if found
                 (push entry valid-overlays)
               (when (overlayp (nth 2 entry))
-                (delete-overlay (nth 2 entry))))))
+                (delete-overlay (nth 2 entry)))
+              (org-table-wrap--clear-overlay-entry entry))))
         (setq org-table-wrap--overlays (nreverse valid-overlays)))
       ;; Process each table (skip the one point is in)
       (dolist (tbl tables)
         (let ((beg (nth 0 tbl))
               (end (nth 1 tbl)))
-          (unless (and org-table-wrap--current-table
-                       (= beg (car org-table-wrap--current-table))
-                       (= end (cdr org-table-wrap--current-table)))
+          (unless (org-table-wrap--same-table-p
+                   (cons beg end) org-table-wrap--current-table)
             (org-table-wrap--process-table beg end)))))))
 
 ;;;; Post-command hook (org-appear pattern)
@@ -730,22 +771,23 @@ With `invisible' overlays (not `display'), point can traverse the
 table region normally, so `org-at-table-p' works."
   (when (and org-table-wrap-mode (derived-mode-p 'org-mode))
     (let* ((in-table (org-table-wrap--point-in-table-p))
-           (same-table (and in-table org-table-wrap--current-table
-                            (= (car in-table)
-                               (car org-table-wrap--current-table))
-                            (= (cdr in-table)
-                               (cdr org-table-wrap--current-table)))))
-      (unless same-table
-        ;; Re-wrap the table we left (if any)
+           (same-table (org-table-wrap--same-table-p
+                        in-table org-table-wrap--current-table)))
+      (cond
+       (same-table
+        ;; Table bounds can shift while editing, e.g. after adding rows.
+        (setq org-table-wrap--current-table in-table))
+       (t
+        ;; Re-wrap the table we left (if any).
         (when org-table-wrap--current-table
           (org-table-wrap--process-table
            (car org-table-wrap--current-table)
            (cdr org-table-wrap--current-table)))
-        ;; Remove overlay from the table we entered (if any)
+        ;; Remove overlay from the table we entered (if any).
         (when in-table
           (org-table-wrap--remove-overlay-at
            (car in-table) (cdr in-table)))
-        (setq org-table-wrap--current-table in-table)))))
+        (setq org-table-wrap--current-table in-table))))))
 
 ;;;; Window resize handling
 

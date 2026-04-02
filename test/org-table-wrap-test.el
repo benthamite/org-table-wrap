@@ -10,8 +10,10 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'ert)
 (require 'org)
+(setq load-prefer-newer t)
 (require 'org-table-wrap)
 
 ;;;; Test helpers
@@ -52,6 +54,11 @@ Override the available width to WIDTH."
   "Parse an hline row."
   (let ((result (org-table-wrap--parse-row "|---+---+---|")))
     (should (eq result 'hline))))
+
+(ert-deftest org-table-wrap-test-parse-leading-dash-cell ()
+  "Rows whose first cell starts with a dash are not parsed as hlines."
+  (let ((result (org-table-wrap--parse-row "|-foo|bar|")))
+    (should (equal result '("-foo" "bar")))))
 
 (ert-deftest org-table-wrap-test-parse-padded-row ()
   "Parse a row with extra whitespace."
@@ -259,6 +266,52 @@ Override the available width to WIDTH."
       (should (null org-table-wrap--current-table))
       (org-table-wrap-mode -1))))
 
+(ert-deftest org-table-wrap-test-editing-table-shape-keeps-it-revealed ()
+  "Editing a revealed table must not reapply a stale overlay."
+  (let ((wide-table
+         (concat
+          "Some text before.\n"
+          "| Very long column header one | Very long column header two |\n"
+          "|-----------------------------+-----------------------------|\n"
+          "| content                     | more content                |\n"
+          "Some text after.\n")))
+    (org-table-wrap-test-with-width 30 wide-table
+      (org-table-wrap-mode 1)
+      (goto-char (point-min))
+      (forward-line 1)
+      (org-table-wrap--post-command)
+      (should (null org-table-wrap--overlays))
+      (end-of-line)
+      (insert "\n| extra row                   | another row                 |")
+      (org-table-wrap--post-command)
+      (should (null org-table-wrap--overlays))
+      (should org-table-wrap--current-table)
+      (goto-char (point-min))
+      (org-table-wrap--post-command)
+      (should (= (length org-table-wrap--overlays) 1))
+      (org-table-wrap-mode -1))))
+
+(ert-deftest org-table-wrap-test-enter-table-after-edit-before-it ()
+  "Overlay bookkeeping stays valid after editing earlier buffer text."
+  (let ((wide-table
+         (concat
+          "Intro line.\n"
+          "| Very long column header one | Very long column header two |\n"
+          "|-----------------------------+-----------------------------|\n"
+          "| content                     | more content                |\n"
+          "Some text after.\n")))
+    (org-table-wrap-test-with-width 30 wide-table
+      (org-table-wrap-mode 1)
+      (should (= (length org-table-wrap--overlays) 1))
+      (goto-char (point-min))
+      (insert "Inserted before table.\n")
+      (goto-char (point-min))
+      (forward-line 2)
+      (org-table-wrap--post-command)
+      (should (null org-table-wrap--overlays))
+      (should org-table-wrap--current-table)
+      (org-table-wrap-mode -1))))
+
 ;;;; Multiple tables handled independently
 
 (ert-deftest org-table-wrap-test-multiple-tables ()
@@ -318,7 +371,7 @@ Override the available width to WIDTH."
   "Window resize handler schedules re-processing."
   (let ((timer-created nil))
     (cl-letf (((symbol-function 'run-with-idle-timer)
-               (lambda (_secs _repeat fn)
+               (lambda (_secs _repeat _fn)
                  (setq timer-created t)
                  ;; Return a fake timer
                  'fake-timer)))
@@ -399,6 +452,18 @@ Override the available width to WIDTH."
     (let ((tables (org-table-wrap--find-tables)))
       (should (= (length tables) 2)))))
 
+(ert-deftest org-table-wrap-test-find-tables-ignores-example-blocks ()
+  "Table discovery ignores non-table lines inside example blocks."
+  (org-table-wrap-test-with-buffer
+      (concat
+       "#+begin_example\n"
+       "| not a table |\n"
+       "#+end_example\n\n"
+       "| a | b |\n"
+       "| c | d |\n")
+    (let ((tables (org-table-wrap--find-tables)))
+      (should (= (length tables) 1)))))
+
 (ert-deftest org-table-wrap-test-table-width ()
   "Compute the width of a table."
   (org-table-wrap-test-with-buffer
@@ -406,6 +471,22 @@ Override the available width to WIDTH."
     (let ((width (org-table-wrap--table-width (point-min) (point-max))))
       ;; "| short | cell |" = 16 chars
       (should (= width 16)))))
+
+(ert-deftest org-table-wrap-test-overlay-at-eof-keeps-original-newline-shape ()
+  "Tables at EOF do not gain a synthetic trailing newline."
+  (let ((wide-table
+         (concat
+          "| Very long column header one | Very long column header two |\n"
+          "|-----------------------------+-----------------------------|\n"
+          "| content                     | more content                |")))
+    (org-table-wrap-test-with-width 30 wide-table
+      (org-table-wrap-mode 1)
+      (let* ((entry (car org-table-wrap--overlays))
+             (ov (nth 2 entry))
+             (before (overlay-get ov 'before-string)))
+        (should (= (length org-table-wrap--overlays) 1))
+        (should-not (string-suffix-p "\n" before)))
+      (org-table-wrap-mode -1))))
 
 (provide 'org-table-wrap-test)
 ;;; org-table-wrap-test.el ends here
