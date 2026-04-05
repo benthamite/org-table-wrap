@@ -10,24 +10,25 @@ Column widths are allocated proportionally based on content, with a two-phase fi
 
 Requires Emacs 29.1+ and Org 9.6+.
 
-**package-vc** (built-in since Emacs 30):
-
-```emacs-lisp
-(package-vc-install "https://github.com/benthamite/org-table-wrap")
-```
-
-**Elpaca**:
+### package-vc (built-in since Emacs 30)
 
 ```emacs-lisp
 (use-package org-table-wrap
-  :ensure (org-table-wrap :host github :repo "benthamite/org-table-wrap"))
+  :vc (:url "https://github.com/benthamite/org-table-wrap"))
 ```
 
-**straight.el**:
+### Elpaca
 
 ```emacs-lisp
-(straight-use-package
- '(org-table-wrap :type git :host github :repo "benthamite/org-table-wrap"))
+(use-package org-table-wrap
+  :ensure (:host github :repo "benthamite/org-table-wrap"))
+```
+
+### straight.el
+
+```emacs-lisp
+(use-package org-table-wrap
+  :straight (:host github :repo "benthamite/org-table-wrap"))
 ```
 
 ## Quick start
