@@ -49,7 +49,7 @@ Open any Org file with a wide table and it will be automatically wrapped to fit 
 
 ## Documentation
 
-For a comprehensive description of all user options, commands, and functions, see the [manual](README.org).
+For a comprehensive description of all user options, commands, and functions, see the [manual](https://stafforini.com/notes/org-table-wrap/).
 
 ## License
 
