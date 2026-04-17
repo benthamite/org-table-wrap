@@ -27,6 +27,8 @@ The rendering pipeline works in two phases.  First, column widths are allocated 
 
 =org-table-wrap.el= requires Emacs 29.1 or later and Org 9.6 or later.
 
+The development repository is on [[https://github.com/benthamite/org-table-wrap][GitHub]].
+
 * User options
 :PROPERTIES:
 :CUSTOM_ID: h:user-options
