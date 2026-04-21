@@ -1,0 +1,153 @@
+\input texinfo    @c -*- texinfo -*-
+@c %**start of header
+@setfilename org-table-wrap.info
+@settitle org-table-wrap: Visual word-wrapping for Org mode tables
+@documentencoding UTF-8
+@documentlanguage en
+@c %**end of header
+
+@dircategory Emacs misc features
+@direntry
+* Org Table Wrap: (org-table-wrap). Visual word-wrapping for Org mode tables.
+@end direntry
+
+@finalout
+@titlepage
+@author Pablo Stafforini (@email{pablo@@stafforini.com})
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top org-table-wrap: Visual word-wrapping for Org mode tables
+
+This manual describes the features and customization options for the Emacs Lisp file @samp{org-table-wrap.el}. @*
+
+@end ifnottex
+
+@menu
+* Overview::
+* User options::
+* Commands::
+* Indices::
+
+@detailmenu
+--- The Detailed Node Listing ---
+
+User options
+
+* Visual appearance::
+* Column sizing::
+
+Commands
+
+* Enabling the mode::
+
+Indices
+
+* Function index::
+* Variable index::
+
+@end detailmenu
+@end menu
+
+@node Overview
+@chapter Overview
+
+Org mode tables are plain-text constructs: every cell in a row must fit on a single line.  When a table has many columns or columns with long content, the table extends beyond the window width and the user must scroll horizontally to see it.  This is disruptive, especially in documents with mixed prose and tabular data. @*
+
+@samp{org-table-wrap.el} solves this problem by providing visual word-wrapping for Org tables that overflow the window.  It uses overlays with the @code{invisible} property and @code{before-string} to replace an overflowing table with a wrapped rendering that uses Unicode box-drawing characters (or ASCII equivalents).  The buffer text is never modified: the wrapped view is purely cosmetic. @*
+
+The package follows the same reveal-on-enter pattern used by @samp{org-appear}: when point enters a wrapped table, the overlay is removed so you can edit the table normally.  When point leaves, the overlay is re-applied.  Window resize events trigger automatic re-processing of all tables, with a short idle debounce to avoid unnecessary work during rapid resizing. @*
+
+The rendering pipeline works in two phases.  First, column widths are allocated proportionally based on each column's natural (max-content) width, respecting a configurable minimum ([BROKEN LINK: h:org-table-wrap-min-column-width]).  Second, the overlay is applied and measured pixel-accurately; if the rendered table still overflows (due to variable-width fonts, display scaling, or face remapping), columns are shrunk iteratively until the table fits. @*
+
+@samp{org-table-wrap.el} requires Emacs 29.1 or later and Org 9.6 or later. @*
+
+The development repository is on @uref{https://github.com/benthamite/org-table-wrap, GitHub}. @*
+
+@node User options
+@chapter User options
+
+@menu
+* Visual appearance::
+* Column sizing::
+@end menu
+
+@node Visual appearance
+@section Visual appearance
+
+@vindex org-table-wrap-use-unicode
+@vindex org-table-wrap-padding
+
+The user option @code{org-table-wrap-use-unicode} controls whether the wrapped table uses Unicode box-drawing characters or ASCII equivalents.  When non-nil (the default), borders are drawn with characters such as @samp{│}, @samp{─}, @samp{┌}, @samp{┘}, @samp{┼}, producing a clean, modern look.  When @code{nil}, the package falls back to @samp{|}, @samp{-}, and @samp{+}, which may be preferable in terminals with limited Unicode support or when copy-pasting table output to plain-text contexts. @*
+
+The user option @code{org-table-wrap-padding} is an integer specifying the number of spaces between the cell content and the column border on each side.  The default value is @code{1}, which gives cells a comfortable amount of breathing room.  Setting it to @code{0} produces a more compact table, while higher values increase readability at the cost of horizontal space.  Since padding is applied on both sides of each cell in every column, increasing this value by 1 consumes @code{2 * ncols} additional characters of width across the table. @*
+
+@node Column sizing
+@section Column sizing
+
+@vindex org-table-wrap-min-column-width
+@vindex org-table-wrap-width-fraction
+
+The user option @code{org-table-wrap-min-column-width} sets the minimum character width for any column in a wrapped table.  The default value is @code{5}.  This prevents columns from being squeezed to an unreadably narrow width when the table has many columns competing for limited horizontal space.  If you frequently work with tables that have many short-content columns (such as boolean flags or single-digit numbers), you might lower this to @code{3}.  Conversely, if your tables contain mostly prose, raising this value ensures that even the narrowest column can display a meaningful fragment of text. @*
+
+The user option @code{org-table-wrap-width-fraction} is a float that determines what fraction of the window width the wrapped table is allowed to occupy.  The default value is @code{0.75}, which is deliberately conservative: it provides a safety margin that compensates for font rendering differences, display scaling, and the prefix overhead introduced by @code{org-indent-mode}.  If the wrapped table appears too narrow for your setup, increase this value toward @code{1.0}.  A value of @code{1.0} uses the full window width, which works well with monospaced fonts and no indentation mode, but may cause slight overflow with proportional fonts or high DPI scaling. @*
+
+The width fraction works in concert with the pixel-accurate fitting phase described in the @ref{Overview}: even if the character-based allocation fits within the fraction, the pixel measurement may trigger further shrinking.  The fraction therefore acts as a first-pass target, not a hard guarantee. @*
+
+@node Commands
+@chapter Commands
+
+@menu
+* Enabling the mode::
+@end menu
+
+@node Enabling the mode
+@section Enabling the mode
+
+@findex org-table-wrap-mode
+@findex global-org-table-wrap-mode
+
+The command @code{org-table-wrap-mode} is a buffer-local minor mode that activates visual word-wrapping for Org tables in the current buffer.  When enabled, all tables in the buffer are scanned: those wider than the window receive an overlay that displays the wrapped rendering.  The mode lighter is @samp{OTW}. @*
+
+Invoke it interactively with @samp{M-x org-table-wrap-mode}, or enable it from your init file for all Org buffers: @*
+
+@lisp
+(add-hook 'org-mode-hook #'org-table-wrap-mode)
+@end lisp
+
+While the mode is active, a @code{post-command-hook} tracks point movement.  When point enters a wrapped table, the overlay is removed so you can edit the underlying Org table normally.  When point leaves, the overlay is re-applied.  This reveal-on-enter behavior is similar to what @samp{org-appear} does for emphasis markers and links. @*
+
+A @code{window-size-change-functions} hook ensures that all wrapped tables are re-processed when the window is resized.  Resize events are debounced with a 0.2-second idle timer to avoid redundant work during rapid resizing (such as dragging a window edge). @*
+
+If the buffer is not yet displayed in any window when the mode is enabled (for example, when a file is opened in the background), processing is deferred via @code{window-configuration-change-hook} until the buffer becomes visible.  This avoids errors from trying to measure pixel widths without a live window. @*
+
+When the mode is disabled, all overlays are removed, the invisibility spec is cleaned up, and the hooks are removed.  The global resize hook is only removed when no other buffer in the session uses @code{org-table-wrap-mode}. @*
+
+The command @code{global-org-table-wrap-mode} is a globalized minor mode that automatically enables @code{org-table-wrap-mode} in every Org buffer.  This is the most convenient way to use the package: @*
+
+@lisp
+(global-org-table-wrap-mode 1)
+@end lisp
+
+@node Indices
+@chapter Indices
+
+@menu
+* Function index::
+* Variable index::
+@end menu
+
+@node Function index
+@section Function index
+
+@printindex fn
+
+@node Variable index
+@section Variable index
+
+@printindex vr
+
+@bye
