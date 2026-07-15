@@ -259,8 +259,14 @@ Override the available width to WIDTH."
       ;; Current table should be tracked
       (should org-table-wrap--current-table)
       ;; Move point out of the table
-      (goto-char (point-min))
-      (org-table-wrap--post-command)
+      (let (scheduled)
+        (cl-letf (((symbol-function 'run-with-idle-timer)
+                   (lambda (_secs _repeat fn &rest args)
+                     (setq scheduled (cons fn args))
+                     'fake-timer)))
+          (goto-char (point-min))
+          (org-table-wrap--post-command)
+          (apply (car scheduled) (cdr scheduled))))
       ;; Overlay should be re-applied
       (should (= (length org-table-wrap--overlays) 1))
       (should (null org-table-wrap--current-table))
@@ -286,10 +292,89 @@ Override the available width to WIDTH."
       (org-table-wrap--post-command)
       (should (null org-table-wrap--overlays))
       (should org-table-wrap--current-table)
-      (goto-char (point-min))
-      (org-table-wrap--post-command)
+      (let (scheduled)
+        (cl-letf (((symbol-function 'run-with-idle-timer)
+                   (lambda (_secs _repeat fn &rest args)
+                     (setq scheduled (cons fn args))
+                     'fake-timer)))
+          (goto-char (point-min))
+          (org-table-wrap--post-command)
+          (apply (car scheduled) (cdr scheduled))))
       (should (= (length org-table-wrap--overlays) 1))
       (org-table-wrap-mode -1))))
+
+(ert-deftest org-table-wrap-test-leaving-table-defers-rewrap ()
+  "Leaving a table schedules rewrapping instead of doing it in the hook."
+  (let ((wide-table
+         (concat
+          "Some text before.\n"
+          "| Very long column header one | Very long column header two |\n"
+          "|-----------------------------+-----------------------------|\n"
+          "| content                     | more content                |\n"
+          "Some text after.\n")))
+    (org-table-wrap-test-with-width 30 wide-table
+      (org-table-wrap-mode 1)
+      (goto-char (point-min))
+      (forward-line 1)
+      (org-table-wrap--post-command)
+      (let (scheduled called)
+        (cl-letf (((symbol-function 'org-table-wrap--process-table)
+                   (lambda (_beg _end)
+                     (setq called t)))
+                  ((symbol-function 'run-with-idle-timer)
+                   (lambda (_secs _repeat fn &rest args)
+                     (setq scheduled (cons fn args))
+                     'fake-timer)))
+          (goto-char (point-min))
+          (org-table-wrap--post-command)
+          (should-not called)
+          (should scheduled)
+          (should (null org-table-wrap--current-table))
+          (apply (car scheduled) (cdr scheduled))
+          (should called)))
+      (org-table-wrap-mode -1))))
+
+(ert-deftest org-table-wrap-test-deferred-rewrap-waits-out-recursive-edit ()
+  "Deferred rewrapping reschedules while Emacs is in a recursive edit."
+  (org-table-wrap-test-with-width 30
+      "| Very long column header one | Very long column header two |\n"
+    (let ((org-table-wrap-mode t)
+          scheduled
+          called)
+      (cl-letf (((symbol-function 'org-table-wrap--process-table)
+                 (lambda (_beg _end)
+                   (setq called t)))
+                ((symbol-function 'recursion-depth)
+                 (lambda ()
+                   1))
+                ((symbol-function 'run-with-idle-timer)
+                 (lambda (_secs _repeat fn &rest args)
+                   (push (cons fn args) scheduled)
+                   'fake-timer)))
+        (org-table-wrap--schedule-table-process (point-min) (point-max))
+        (apply (caar scheduled) (cdar scheduled))
+        (should-not called)
+        (should (= (length scheduled) 2))))))
+
+(ert-deftest org-table-wrap-test-deferred-rewrap-contains-errors ()
+  "Deferred rewrapping reports failures without signaling."
+  (org-table-wrap-test-with-width 30
+      "| Very long column header one | Very long column header two |\n"
+    (let ((org-table-wrap-mode t)
+          (beg-marker (copy-marker (point-min) t))
+          (end-marker (copy-marker (point-max)))
+          reported)
+      (cl-letf (((symbol-function 'org-table-wrap--process-table)
+                 (lambda (_beg _end)
+                   (error "boom")))
+                ((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq reported (apply #'format format-string args)))))
+        (org-table-wrap--process-table-when-idle
+         (current-buffer) beg-marker end-marker)
+        (should (string-match-p "table re-processing failed: boom" reported))
+        (should (null (marker-position beg-marker)))
+        (should (null (marker-position end-marker)))))))
 
 (ert-deftest org-table-wrap-test-enter-table-after-edit-before-it ()
   "Overlay bookkeeping stays valid after editing earlier buffer text."

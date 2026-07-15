@@ -91,6 +91,12 @@ is too narrow for your setup."
 (defvar org-table-wrap--resize-timer nil
   "Idle timer for debouncing window resize events.")
 
+(defvar-local org-table-wrap--pending-table-timer nil
+  "Idle timer for re-processing the table most recently left by point.")
+
+(defconst org-table-wrap--idle-delay 0.2
+  "Idle delay before deferred visual table updates run.")
+
 (defun org-table-wrap--make-overlay-entry (beg end overlay)
   "Return an overlay entry for table bounds BEG..END and OVERLAY.
 The bounds are stored as live markers so they keep tracking the table
@@ -780,7 +786,7 @@ table region normally, so `org-at-table-p' works."
        (t
         ;; Re-wrap the table we left (if any).
         (when org-table-wrap--current-table
-          (org-table-wrap--process-table
+          (org-table-wrap--schedule-table-process
            (car org-table-wrap--current-table)
            (cdr org-table-wrap--current-table)))
         ;; Remove overlay from the table we entered (if any).
@@ -788,6 +794,88 @@ table region normally, so `org-at-table-p' works."
           (org-table-wrap--remove-overlay-at
            (car in-table) (cdr in-table)))
         (setq org-table-wrap--current-table in-table))))))
+
+(defun org-table-wrap--schedule-table-process (beg end)
+  "Schedule the table between BEG and END for idle re-processing."
+  (org-table-wrap--cancel-pending-table-process)
+  (let ((buffer (current-buffer))
+        (beg-marker (copy-marker beg t))
+        (end-marker (copy-marker end)))
+    (setq org-table-wrap--pending-table-timer
+          (run-with-idle-timer
+           org-table-wrap--idle-delay nil
+           #'org-table-wrap--process-table-when-idle
+           buffer beg-marker end-marker))))
+
+(defun org-table-wrap--cancel-pending-table-process ()
+  "Cancel the pending idle table re-processing timer."
+  (when org-table-wrap--pending-table-timer
+    (cancel-timer org-table-wrap--pending-table-timer)
+    (setq org-table-wrap--pending-table-timer nil)))
+
+(defun org-table-wrap--process-table-when-idle (buffer beg-marker end-marker)
+  "Process the table in BUFFER between BEG-MARKER and END-MARKER."
+  (cond
+   ((not (buffer-live-p buffer))
+    (org-table-wrap--clear-table-process-markers beg-marker end-marker))
+   ((> (recursion-depth) 0)
+    (org-table-wrap--reschedule-table-process buffer beg-marker end-marker))
+   (t
+    (unwind-protect
+        (org-table-wrap--process-table-safely buffer beg-marker end-marker)
+      (org-table-wrap--clear-table-process-markers beg-marker end-marker)))))
+
+(defun org-table-wrap--reschedule-table-process (buffer beg-marker end-marker)
+  "Reschedule table processing for BUFFER with BEG-MARKER and END-MARKER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when org-table-wrap-mode
+        (setq org-table-wrap--pending-table-timer
+              (run-with-idle-timer
+               org-table-wrap--idle-delay nil
+               #'org-table-wrap--process-table-when-idle
+               buffer beg-marker end-marker))))))
+
+(defun org-table-wrap--process-table-safely (buffer beg-marker end-marker)
+  "Process BUFFER's marked table without entering recursive debuggers.
+BEG-MARKER and END-MARKER delimit the table to process."
+  (let ((debug-on-error nil)
+        (debug-on-quit nil))
+    (condition-case err
+        (org-table-wrap--process-table-in-buffer buffer beg-marker end-marker)
+      (quit
+       (message "org-table-wrap: table re-processing quit"))
+      (error
+       (message "org-table-wrap: table re-processing failed: %s"
+                (error-message-string err))))))
+
+(defun org-table-wrap--process-table-in-buffer (buffer beg-marker end-marker)
+  "Process BUFFER's table between BEG-MARKER and END-MARKER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq org-table-wrap--pending-table-timer nil)
+      (when (and org-table-wrap-mode (derived-mode-p 'org-mode))
+        (let ((bounds (org-table-wrap--live-table-bounds
+                       beg-marker end-marker)))
+          (when (and bounds
+                     (not (org-table-wrap--same-table-p
+                           bounds org-table-wrap--current-table)))
+            (org-table-wrap--process-table (car bounds) (cdr bounds))))))))
+
+(defun org-table-wrap--live-table-bounds (beg-marker end-marker)
+  "Return live table bounds from BEG-MARKER and END-MARKER."
+  (let ((beg (marker-position beg-marker))
+        (end (marker-position end-marker)))
+    (when (and beg end (< beg end) (<= beg (point-max)))
+      (save-excursion
+        (goto-char beg)
+        (when (org-at-table-p)
+          (cons (org-table-begin) (org-table-end)))))))
+
+(defun org-table-wrap--clear-table-process-markers (beg-marker end-marker)
+  "Release BEG-MARKER and END-MARKER used by idle table processing."
+  (set-marker beg-marker nil)
+  (set-marker end-marker nil))
 
 ;;;; Window resize handling
 
@@ -826,6 +914,7 @@ modified."
     (remove-hook 'post-command-hook #'org-table-wrap--post-command t)
     (remove-hook 'window-configuration-change-hook
                  #'org-table-wrap--deferred-process t)
+    (org-table-wrap--cancel-pending-table-process)
     (org-table-wrap--remove-overlays)
     (setq org-table-wrap--current-table nil)
     ;; Only remove the global resize hook when no other buffer uses the mode

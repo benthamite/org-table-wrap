@@ -21,9 +21,9 @@ Org mode tables are plain-text constructs: every cell in a row must fit on a sin
 
 =org-table-wrap.el= solves this problem by providing visual word-wrapping for Org tables that overflow the window.  It uses overlays with the ~invisible~ property and ~before-string~ to replace an overflowing table with a wrapped rendering that uses Unicode box-drawing characters (or ASCII equivalents).  The buffer text is never modified: the wrapped view is purely cosmetic.
 
-The package follows the same reveal-on-enter pattern used by =org-appear=: when point enters a wrapped table, the overlay is removed so you can edit the table normally.  When point leaves, the overlay is re-applied.  Window resize events trigger automatic re-processing of all tables, with a short idle debounce to avoid unnecessary work during rapid resizing.
+The package follows the same reveal-on-enter pattern used by =org-appear=: when point enters a wrapped table, the overlay is removed so you can edit the table normally.  When point leaves, the overlay is re-applied from an idle timer, so the movement hook stays lightweight.  Window resize events trigger automatic re-processing of all tables, with a short idle debounce to avoid unnecessary work during rapid resizing.
 
-The rendering pipeline works in two phases.  First, column widths are allocated proportionally based on each column's natural (max-content) width, respecting a configurable minimum ([[#h:org-table-wrap-min-column-width][~org-table-wrap-min-column-width~]]).  Second, the overlay is applied and measured pixel-accurately; if the rendered table still overflows (due to variable-width fonts, display scaling, or face remapping), columns are shrunk iteratively until the table fits.
+The rendering pipeline works in two phases.  First, column widths are allocated proportionally based on each column's natural (max-content) width, respecting a configurable minimum (~org-table-wrap-min-column-width~).  Second, the overlay is applied and measured pixel-accurately; if the rendered table still overflows (due to variable-width fonts, display scaling, or face remapping), columns are shrunk iteratively until the table fits.
 
 =org-table-wrap.el= requires Emacs 29.1 or later and Org 9.6 or later.
 
@@ -81,7 +81,7 @@ Invoke it interactively with =M-x org-table-wrap-mode=, or enable it from your i
 (add-hook 'org-mode-hook #'org-table-wrap-mode)
 #+end_src
 
-While the mode is active, a ~post-command-hook~ tracks point movement.  When point enters a wrapped table, the overlay is removed so you can edit the underlying Org table normally.  When point leaves, the overlay is re-applied.  This reveal-on-enter behavior is similar to what =org-appear= does for emphasis markers and links.
+While the mode is active, a ~post-command-hook~ tracks point movement.  When point enters a wrapped table, the overlay is removed so you can edit the underlying Org table normally.  When point leaves, re-wrapping is deferred to an idle timer and is postponed while Emacs is inside a recursive edit, such as the debugger.  This reveal-on-enter behavior is similar to what =org-appear= does for emphasis markers and links.
 
 A ~window-size-change-functions~ hook ensures that all wrapped tables are re-processed when the window is resized.  Resize events are debounced with a 0.2-second idle timer to avoid redundant work during rapid resizing (such as dragging a window edge).
 

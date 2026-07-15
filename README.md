@@ -2,7 +2,7 @@
 
 Org mode tables are plain-text constructs where every cell must fit on a single line. When a table has many columns or long cell content, it overflows the window and forces horizontal scrolling. `org-table-wrap` fixes this by rendering overflowing tables with word-wrapped cells using overlays — the buffer text is never modified.
 
-The wrapped rendering uses Unicode box-drawing characters (with an ASCII fallback) and follows the same reveal-on-enter pattern as `org-appear`: when point enters a wrapped table, the overlay is removed for normal editing; when point leaves, the overlay is re-applied. Tables are automatically re-wrapped on window resize.
+The wrapped rendering uses Unicode box-drawing characters (with an ASCII fallback) and follows the same reveal-on-enter pattern as `org-appear`: when point enters a wrapped table, the overlay is removed for normal editing; when point leaves, re-wrapping is deferred to an idle timer so the movement hook stays lightweight. Tables are automatically re-wrapped on window resize.
 
 Column widths are allocated proportionally based on content, with a two-phase fitting approach: first a character-based allocation, then a pixel-accurate measurement pass that handles variable-width fonts, display scaling, and `org-indent-mode` prefix overhead.
 
