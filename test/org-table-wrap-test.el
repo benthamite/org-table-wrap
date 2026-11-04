@@ -573,6 +573,29 @@ Override the available width to WIDTH."
         (should-not (string-suffix-p "\n" before)))
       (org-table-wrap-mode -1))))
 
+;;;; Point stays put while wrapping
+
+(ert-deftest org-table-wrap-test-wrapping-keeps-point-for-redisplay ()
+  "Wrapping redisplays with point where the user left it.
+Redisplaying with point moved to the table would scroll the window
+there, so a window size change scrolled the buffer."
+  (with-temp-buffer
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (org-mode)
+      (insert "text\n\n| a | " (make-string 300 ?x) " |\n\nafter\n")
+      (goto-char (point-max))
+      (let ((noninteractive nil)
+            (here (point))
+            points)
+        (cl-letf (((symbol-function 'redisplay)
+                   (lambda (&optional _force) (push (point) points))))
+          (org-table-wrap-mode 1)
+          (org-table-wrap--process-buffer))
+        (org-table-wrap-mode -1)
+        (should points)
+        (should (cl-every (lambda (pos) (= pos here)) points))))))
+
 ;;;; Passing through several tables
 
 (ert-deftest org-table-wrap-test-passing-two-tables-rewraps-both ()

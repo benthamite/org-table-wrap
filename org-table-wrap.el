@@ -704,8 +704,9 @@ Apply a wrapping overlay if the table overflows the window."
     ;; Wrap only a table that overflows; one that fits stays unwrapped
     (when (> table-width win-width)
       (font-lock-ensure beg end)  ; ensure text properties are up to date
+      ;; Leave point alone: fitting redisplays, which would scroll the
+      ;; window to the table if point were moved there.
       (save-excursion
-        (goto-char beg)  ; ensure point is at the table for prefix measurement
         (let* ((rows (org-table-wrap--parse-table beg end))
                (ncols (org-table-wrap--num-columns rows))
                (border-overhead (+ (1+ ncols) ; ncols+1 vertical separators
